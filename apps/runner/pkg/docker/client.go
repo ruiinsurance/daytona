@@ -27,6 +27,9 @@ type DockerClientConfig struct {
 	AWSEndpointUrl               string
 	AWSAccessKeyId               string
 	AWSSecretAccessKey           string
+	AWSDefaultBucket             string
+	AWSVolumeLayout              string
+	AWSVolumePrefix              string
 	DaemonPath                   string
 	ComputerUsePluginPath        string
 	NetRulesManager              *netrules.NetRulesManager
@@ -144,6 +147,9 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		awsEndpointUrl:               config.AWSEndpointUrl,
 		awsAccessKeyId:               config.AWSAccessKeyId,
 		awsSecretAccessKey:           config.AWSSecretAccessKey,
+		awsDefaultBucket:             config.AWSDefaultBucket,
+		awsVolumeLayout:              config.AWSVolumeLayout,
+		awsVolumePrefix:              config.AWSVolumePrefix,
 		volumeMutexes:                make(map[string]*sync.Mutex),
 		daemonPath:                   config.DaemonPath,
 		computerUsePluginPath:        config.ComputerUsePluginPath,
@@ -200,6 +206,9 @@ type DockerClient struct {
 	awsEndpointUrl               string
 	awsAccessKeyId               string
 	awsSecretAccessKey           string
+	awsDefaultBucket             string
+	awsVolumeLayout              string
+	awsVolumePrefix              string
 	volumeMutexes                map[string]*sync.Mutex
 	volumeMutexesMutex           sync.Mutex
 	daemonPath                   string

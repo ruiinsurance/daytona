@@ -34,6 +34,12 @@ export class ObjectStorageService {
     if (!this.configService.get('s3.endpoint')) {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
+    if (
+      this.configService.get('s3.volumeLayout') === 'single-bucket-prefix' ||
+      this.configService.get('s3.stsProvider') === 'disabled'
+    ) {
+      throw new ServiceUnavailableException('Object storage push access is disabled for single-bucket-prefix volumes')
+    }
 
     try {
       const bucket = this.configService.getOrThrow('s3.defaultBucket')
@@ -73,7 +79,11 @@ export class ObjectStorageService {
         },
       }
 
-      const isMinioServer = s3Config.endpoint.includes('minio')
+      const stsProvider = this.configService.get('s3.stsProvider') || 'auto'
+      if (!['auto', 'minio', 'aws'].includes(stsProvider)) {
+        throw new Error(`Unsupported S3 STS provider: ${stsProvider}`)
+      }
+      const isMinioServer = stsProvider === 'minio' || (stsProvider === 'auto' && s3Config.endpoint.includes('minio'))
 
       if (isMinioServer) {
         return this.getMinioCredentials(s3Config)

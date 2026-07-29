@@ -21,6 +21,10 @@ import (
 )
 
 const volumeMountPrefix = "daytona-volume-"
+const (
+	perVolumeBucketLayout    = "per-volume-bucket"
+	singleBucketPrefixLayout = "single-bucket-prefix"
+)
 
 // volumeId becomes part of the host mount path and the S3 bucket name, so require
 // the canonical lowercase UUID form (rejects braced/URN/dashless/uppercase variants,
@@ -83,7 +87,7 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 				}
 				errMu.Unlock()
 			}
-		}(volumeIdPrefixed, baseMountPath)
+		}(strings.TrimPrefix(volumeIdPrefixed, volumeMountPrefix), baseMountPath)
 	}
 	wg.Wait()
 	if firstErr != nil {
@@ -150,7 +154,16 @@ func (d *DockerClient) ensureVolumeFuseMounted(ctx context.Context, volumeId str
 
 	d.logger.InfoContext(ctx, "mounting S3 volume", "volumeId", volumeId, "mountPath", mountPath)
 
-	cmd := d.getMountCmd(ctx, volumeId, mountPath)
+	cmd, err := d.getMountCmd(ctx, volumeId, mountPath)
+	if err != nil {
+		if !dirExisted {
+			removeErr := os.Remove(mountPath)
+			if removeErr != nil {
+				d.logger.WarnContext(ctx, "failed to remove mount directory", "path", mountPath, "error", removeErr)
+			}
+		}
+		return err
+	}
 	err = cmd.Run()
 	if err != nil {
 		if !dirExisted {
@@ -225,9 +238,59 @@ func (d *DockerClient) waitForMountReady(ctx context.Context, path string) error
 	return fmt.Errorf("mount did not become ready within timeout")
 }
 
-func (d *DockerClient) getMountCmd(ctx context.Context, volume string, path string) *exec.Cmd {
+func (d *DockerClient) getMountArgs(volumeId string, path string) ([]string, error) {
+	if !isValidVolumeId(volumeId) {
+		return nil, fmt.Errorf("invalid volumeId %q: must be a canonical lowercase UUID", volumeId)
+	}
+
 	args := []string{"--allow-other", "--allow-delete", "--allow-overwrite", "--file-mode", "0666", "--dir-mode", "0777"}
-	args = append(args, volume, path)
+	switch d.awsVolumeLayout {
+	case "", perVolumeBucketLayout:
+		args = append(args, volumeMountPrefix+volumeId, path)
+	case singleBucketPrefixLayout:
+		if err := validateFixedBucket(d.awsDefaultBucket); err != nil {
+			return nil, err
+		}
+		prefix, err := buildCanonicalVolumePrefix(d.awsVolumePrefix, volumeId)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--prefix", prefix, d.awsDefaultBucket, path)
+	default:
+		return nil, fmt.Errorf("unsupported AWS volume layout %q", d.awsVolumeLayout)
+	}
+	return args, nil
+}
+
+func validateFixedBucket(bucket string) error {
+	if bucket == "" || bucket != strings.TrimSpace(bucket) || strings.ContainsAny(bucket, `/\`) {
+		return fmt.Errorf("invalid fixed S3 bucket %q: expected a non-empty bucket name", bucket)
+	}
+	return nil
+}
+
+func buildCanonicalVolumePrefix(rootPrefix string, volumeId string) (string, error) {
+	if rootPrefix == "" || rootPrefix != strings.TrimSpace(rootPrefix) || strings.HasSuffix(rootPrefix, "/") || strings.Contains(rootPrefix, `\`) {
+		return "", fmt.Errorf("invalid volume prefix %q: expected a non-empty canonical relative path without a trailing slash", rootPrefix)
+	}
+	for _, segment := range strings.Split(rootPrefix, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", fmt.Errorf("invalid volume prefix %q: expected a non-empty canonical relative path", rootPrefix)
+		}
+	}
+
+	prefix := rootPrefix + "/" + volumeId + "/"
+	if strings.HasPrefix(prefix, "/") {
+		return "", fmt.Errorf("invalid volume prefix %q: expected a relative path", rootPrefix)
+	}
+	return prefix, nil
+}
+
+func (d *DockerClient) getMountCmd(ctx context.Context, volumeId string, path string) (*exec.Cmd, error) {
+	args, err := d.getMountArgs(volumeId, path)
+	if err != nil {
+		return nil, err
+	}
 
 	var envVars []string
 	if d.awsEndpointUrl != "" {
@@ -249,7 +312,7 @@ func (d *DockerClient) getMountCmd(ctx context.Context, volume string, path stri
 	cmd := exec.CommandContext(ctx, "mount-s3", args...)
 	cmd.Env = envVars
 
-	_, err := os.Stat("/run/systemd/system")
+	_, err = os.Stat("/run/systemd/system")
 	if err == nil {
 		// Isolate mount-s3 in its own cgroup so the FUSE daemon survives runner restarts.
 		sdArgs := []string{"--scope"}
@@ -264,5 +327,5 @@ func (d *DockerClient) getMountCmd(ctx context.Context, volume string, path stri
 	cmd.Stderr = io.Writer(&log.ErrorLogWriter{})
 	cmd.Stdout = io.Writer(&log.InfoLogWriter{})
 
-	return cmd
+	return cmd, nil
 }

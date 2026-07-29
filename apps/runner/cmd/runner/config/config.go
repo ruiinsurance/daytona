@@ -39,7 +39,9 @@ type Config struct {
 	AWSEndpointUrl                     string        `envconfig:"AWS_ENDPOINT_URL"`
 	AWSAccessKeyId                     string        `envconfig:"AWS_ACCESS_KEY_ID"`
 	AWSSecretAccessKey                 string        `envconfig:"AWS_SECRET_ACCESS_KEY"`
-	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
+	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
+	AWSVolumeLayout                    string        `envconfig:"AWS_VOLUME_LAYOUT" default:"per-volume-bucket" validate:"oneof=per-volume-bucket single-bucket-prefix"`
+	AWSVolumePrefix                    string        `envconfig:"AWS_VOLUME_PREFIX" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`

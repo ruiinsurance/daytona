@@ -9,12 +9,20 @@ import { Repository, In } from 'typeorm'
 import { Volume } from '../entities/volume.entity'
 import { VolumeState } from '../enums/volume-state.enum'
 import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule'
-import { S3Client, CreateBucketCommand, ListBucketsCommand, PutBucketTaggingCommand } from '@aws-sdk/client-s3'
+import {
+  S3Client,
+  CreateBucketCommand,
+  HeadBucketCommand,
+  ListBucketsCommand,
+  PutBucketTaggingCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { TypedConfigService } from '../../config/typed-config.service'
-import { deleteS3Bucket } from '../../common/utils/delete-s3-bucket'
+import { deleteS3Bucket, deleteS3Prefix } from '../../common/utils/delete-s3-bucket'
+import { assertSafeFixedBucket, buildCanonicalVolumePrefix } from '../../common/utils/s3-volume-prefix'
 
 import { TrackableJobExecutions } from '../../common/interfaces/trackable-job-executions'
 import { TrackJobExecution } from '../../common/decorators/track-job-execution.decorator'
@@ -47,6 +55,11 @@ export class VolumeManager
       return
     }
 
+    const volumeLayout = this.configService.get('s3.volumeLayout') || 'per-volume-bucket'
+    if (!['per-volume-bucket', 'single-bucket-prefix'].includes(volumeLayout)) {
+      throw new Error(`Unsupported S3 volume layout: ${volumeLayout}`)
+    }
+
     const endpoint = this.configService.getOrThrow('s3.endpoint')
     const region = this.configService.getOrThrow('s3.region')
     const accessKeyId = this.configService.getOrThrow('s3.accessKey')
@@ -60,7 +73,7 @@ export class VolumeManager
         accessKeyId,
         secretAccessKey,
       },
-      forcePathStyle: true,
+      forcePathStyle: this.configService.get('s3.forcePathStyle') ?? true,
     })
   }
 
@@ -95,8 +108,14 @@ export class VolumeManager
 
   private async testConnection() {
     try {
-      // Try a simple operation to test the connection
-      const command = new ListBucketsCommand({})
+      let command
+      if (this.configService.get('s3.volumeLayout') === 'single-bucket-prefix') {
+        const bucket = this.configService.getOrThrow('s3.defaultBucket')
+        assertSafeFixedBucket(bucket)
+        command = new HeadBucketCommand({ Bucket: bucket })
+      } else {
+        command = new ListBucketsCommand({})
+      }
       await this.s3Client.send(command)
       this.logger.debug('Successfully connected to S3')
     } catch (error) {
@@ -191,34 +210,47 @@ export class VolumeManager
       // Refresh lock before S3 operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Create bucket in Minio/S3
-      const createBucketCommand = new CreateBucketCommand({
-        Bucket: volume.getBucketName(),
-      })
+      if (this.configService.get('s3.volumeLayout') === 'single-bucket-prefix') {
+        const { bucket, prefix } = this.getSingleBucketVolumeLocation(volume.id)
 
-      await this.s3Client.send(createBucketCommand)
-
-      await this.s3Client.send(
-        new PutBucketTaggingCommand({
+        await this.s3Client.send(new HeadBucketCommand({ Bucket: bucket }))
+        await this.s3Client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: `${prefix}.daytona-volume`,
+            Body: '',
+          }),
+        )
+      } else {
+        // Create bucket in Minio/S3
+        const createBucketCommand = new CreateBucketCommand({
           Bucket: volume.getBucketName(),
-          Tagging: {
-            TagSet: [
-              {
-                Key: 'VolumeId',
-                Value: volume.id,
-              },
-              {
-                Key: 'OrganizationId',
-                Value: volume.organizationId,
-              },
-              {
-                Key: 'Environment',
-                Value: this.configService.get('environment'),
-              },
-            ],
-          },
-        }),
-      )
+        })
+
+        await this.s3Client.send(createBucketCommand)
+
+        await this.s3Client.send(
+          new PutBucketTaggingCommand({
+            Bucket: volume.getBucketName(),
+            Tagging: {
+              TagSet: [
+                {
+                  Key: 'VolumeId',
+                  Value: volume.id,
+                },
+                {
+                  Key: 'OrganizationId',
+                  Value: volume.organizationId,
+                },
+                {
+                  Key: 'Environment',
+                  Value: this.configService.get('environment'),
+                },
+              ],
+            },
+          }),
+        )
+      }
 
       // Refresh lock before final state update
       await this.redis.setex(lockKey, 30, '1')
@@ -253,16 +285,21 @@ export class VolumeManager
       // Refresh lock before S3 operation
       await this.redis.setex(lockKey, 30, '1')
 
-      // Delete bucket from Minio/S3
-      try {
-        await deleteS3Bucket(this.s3Client, volume.getBucketName())
-      } catch (error) {
-        if (error.name === 'NoSuchBucket') {
-          this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
-        } else if (error.name === 'BucketNotEmpty') {
-          throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
-        } else {
-          throw error
+      if (this.configService.get('s3.volumeLayout') === 'single-bucket-prefix') {
+        const { bucket, prefix } = this.getSingleBucketVolumeLocation(volume.id)
+        await deleteS3Prefix(this.s3Client, bucket, prefix)
+      } else {
+        // Delete bucket from Minio/S3
+        try {
+          await deleteS3Bucket(this.s3Client, volume.getBucketName())
+        } catch (error) {
+          if (error.name === 'NoSuchBucket') {
+            this.logger.warn(`Bucket for volume ${volume.id} does not exist, treating as already deleted`)
+          } else if (error.name === 'BucketNotEmpty') {
+            throw new Error('Volume deletion failed because the bucket is not empty. You may retry deletion.')
+          } else {
+            throw error
+          }
         }
       }
 
@@ -290,6 +327,16 @@ export class VolumeManager
         state: VolumeState.ERROR,
         errorReason: error.message,
       })
+    }
+  }
+
+  private getSingleBucketVolumeLocation(volumeId: string): { bucket: string; prefix: string } {
+    const bucket = this.configService.getOrThrow('s3.defaultBucket')
+    const rootPrefix = this.configService.getOrThrow('s3.volumePrefix')
+    assertSafeFixedBucket(bucket)
+    return {
+      bucket,
+      prefix: buildCanonicalVolumePrefix(rootPrefix, volumeId),
     }
   }
 }

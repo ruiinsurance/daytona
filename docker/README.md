@@ -58,6 +58,7 @@ This configures dnsmasq with `address=/proxy.localhost/127.0.0.1`.
 - Database and storage data is persisted in Docker volumes
 - The registry is configured to allow image deletion for testing
 - Sandbox resource limits are disabled due to inability to partition cgroups in DinD environment where the sock is not mounted
+- Tencent COS single-bucket volume deployments use the separate [configuration contract](COS_SINGLE_BUCKET_VOLUMES.md).
 
 <br><br><br>
 
