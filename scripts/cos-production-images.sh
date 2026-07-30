@@ -378,8 +378,8 @@ build_alpine_builder_image() {
     --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
     --label "org.opencontainers.image.version=${IMAGE_TAG}" \
     --build-arg "ALPINE_PACKAGE_MIRROR=${ALPINE_PACKAGE_MIRROR}" \
-    "${proxy_args[@]}" \
-    "${context_args[@]}" \
+    "${proxy_args[@]+"${proxy_args[@]}"}" \
+    "${context_args[@]+"${context_args[@]}"}" \
     "${REPO_ROOT}" <<'EOF'
 FROM node:22-alpine
 ARG ALPINE_PACKAGE_MIRROR
@@ -420,8 +420,8 @@ build_computer_use_artifact() {
     --label "org.opencontainers.image.source=${OCI_SOURCE}" \
     --label "org.opencontainers.image.revision=${SOURCE_REVISION}" \
     --label "org.opencontainers.image.version=${IMAGE_TAG}" \
-    "${proxy_args[@]}" \
-    "${context_args[@]}" \
+    "${proxy_args[@]+"${proxy_args[@]}"}" \
+    "${context_args[@]+"${context_args[@]}"}" \
     "${REPO_ROOT}"
 
   container_id=$(docker create --platform "${PLATFORM}" "${helper_image}")
