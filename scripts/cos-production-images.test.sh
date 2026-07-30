@@ -156,6 +156,68 @@ exit 99
 EOF
 chmod +x "${mock_bin}/docker"
 
+bash32_repo="${TEST_ROOT}/bash32-repo"
+bash32_mock_bin="${TEST_ROOT}/bash32-mock-bin"
+bash32_docker_log="${TEST_ROOT}/bash32-docker.log"
+git clone --quiet --shared "${REPO_ROOT}" "${bash32_repo}"
+cp "${SCRIPT}" "${bash32_repo}/scripts/cos-production-images.sh"
+mkdir -p "${bash32_mock_bin}"
+cat > "${bash32_mock_bin}/docker" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s' "${1:-}" >> "${BASH32_DOCKER_LOG}"
+for argument in "${@:2}"; do
+  printf '\t%s' "${argument}" >> "${BASH32_DOCKER_LOG}"
+done
+printf '\n' >> "${BASH32_DOCKER_LOG}"
+
+case "${1:-}" in
+  info)
+    exit 0
+    ;;
+  buildx)
+    case "${2:-}" in
+      version|build)
+        exit 0
+        ;;
+      inspect)
+        printf 'Platforms: linux/amd64\n'
+        exit 0
+        ;;
+    esac
+    ;;
+  create)
+    printf 'bash32-container\n'
+    exit 0
+    ;;
+  cp)
+    printf 'fake computer-use artifact\n' > "${3}"
+    exit 0
+    ;;
+  rm)
+    exit 0
+    ;;
+esac
+exit 99
+EOF
+cat > "${bash32_mock_bin}/file" <<'EOF'
+#!/usr/bin/env bash
+printf '%s: ELF 64-bit LSB executable, x86-64\n' "${1:-artifact}"
+EOF
+chmod +x "${bash32_mock_bin}/docker" "${bash32_mock_bin}/file"
+
+expect_success \
+  'Bash 3.2 build supports empty optional proxy and mirror argument arrays' \
+  env PATH="${bash32_mock_bin}:${PATH}" BASH32_DOCKER_LOG="${bash32_docker_log}" \
+  /bin/bash "${bash32_repo}/scripts/cos-production-images.sh" build \
+  --repository-prefix registry.example.com/ruiinsurance \
+  --output-dir "${TEST_ROOT}/bash32-output"
+if [[ "$(grep -c $'^buildx\\tbuild\\t' "${bash32_docker_log}" || true)" -eq 5 ]]; then
+  pass 'Bash 3.2 build reaches the helper and four product buildx calls'
+else
+  fail 'Bash 3.2 build reaches the helper and four product buildx calls'
+fi
+
 empty_output="${TEST_ROOT}/empty"
 mkdir -p "${empty_output}"
 expect_failure \
