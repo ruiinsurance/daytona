@@ -24,6 +24,7 @@ const volumeMountPrefix = "daytona-volume-"
 const (
 	perVolumeBucketLayout    = "per-volume-bucket"
 	singleBucketPrefixLayout = "single-bucket-prefix"
+	volumeMountReadyTimeout  = 5 * time.Second
 )
 
 // volumeId becomes part of the host mount path and the S3 bucket name, so require
@@ -139,6 +140,9 @@ func (d *DockerClient) ensureVolumeFuseMounted(ctx context.Context, volumeId str
 	defer volumeMutex.Unlock()
 
 	if d.isDirectoryMounted(mountPath) {
+		if err := d.waitForMountReady(ctx, mountPath); err != nil {
+			return fmt.Errorf("existing S3 volume mount %s is not ready: %w", mountPath, err)
+		}
 		d.logger.DebugContext(ctx, "volume already mounted", "volumeId", volumeId, "mountPath", mountPath)
 		return nil
 	}
@@ -201,12 +205,51 @@ func (d *DockerClient) isDirectoryMounted(path string) bool {
 	return err == nil
 }
 
+func probeMountDirectory(ctx context.Context, path string) error {
+	result := make(chan error, 1)
+	go func() {
+		info, err := os.Stat(path)
+		if err != nil {
+			result <- err
+			return
+		}
+		if !info.IsDir() {
+			result <- fmt.Errorf("mount path is not a directory")
+			return
+		}
+
+		dir, err := os.Open(path)
+		if err != nil {
+			result <- err
+			return
+		}
+		defer dir.Close()
+
+		_, err = dir.Readdirnames(1)
+		if err == io.EOF {
+			err = nil
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // waitForMountReady waits for a FUSE mount to be fully accessible
 // FUSE mounts can be asynchronous - the mount command may return before the filesystem is ready
 // This prevents a race condition where the container writes to the directory before the mount is ready
 func (d *DockerClient) waitForMountReady(ctx context.Context, path string) error {
+	readyCtx, cancel := context.WithTimeout(ctx, volumeMountReadyTimeout)
+	defer cancel()
+
 	maxAttempts := 50 // 5 seconds total (50 * 100ms)
 	sleepDuration := 100 * time.Millisecond
+	var lastErr error
 
 	for i := 0; i < maxAttempts; i++ {
 		// First verify the mountpoint is still registered
@@ -214,28 +257,23 @@ func (d *DockerClient) waitForMountReady(ctx context.Context, path string) error
 			return fmt.Errorf("mount disappeared during readiness check")
 		}
 
-		// Try to stat the mount point to ensure filesystem is responsive
-		// This will fail if FUSE is not ready yet
-		_, err := os.Stat(path)
-		if err == nil {
-			// Try to read directory to ensure it's fully operational
-			_, err = os.ReadDir(path)
-			if err == nil {
-				d.logger.InfoContext(ctx, "mount is ready", "path", path, "attempts", i+1)
-				return nil
-			}
+		if err := probeMountDirectory(readyCtx, path); err == nil {
+			d.logger.InfoContext(ctx, "mount is ready", "path", path, "attempts", i+1)
+			return nil
+		} else {
+			lastErr = err
 		}
 
 		// Wait a bit before retrying
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for mount ready: %w", ctx.Err())
+		case <-readyCtx.Done():
+			return fmt.Errorf("mount readiness probe failed: %w", lastErr)
 		case <-time.After(sleepDuration):
 			// Continue to next iteration
 		}
 	}
 
-	return fmt.Errorf("mount did not become ready within timeout")
+	return fmt.Errorf("mount did not become ready within timeout: %w", lastErr)
 }
 
 func (d *DockerClient) getMountArgs(volumeId string, path string) ([]string, error) {
