@@ -79,6 +79,69 @@ func TestVerifyContainerVolumeMountDevicesRejectsDifferentDevice(t *testing.T) {
 	}
 }
 
+func TestFilesystemDeviceInContainerRootScopesAbsoluteSymlinkToContainerRoot(t *testing.T) {
+	containerRoot := t.TempDir()
+	targetName := "workspace-" + filepath.Base(containerRoot)
+	logicalTarget := string(filepath.Separator) + targetName
+	physicalTarget := filepath.Join(containerRoot, targetName)
+	if err := os.Mkdir(physicalTarget, 0o755); err != nil {
+		t.Fatalf("create container workspace target: %v", err)
+	}
+	if err := os.Symlink(logicalTarget, filepath.Join(containerRoot, "config")); err != nil {
+		t.Fatalf("create absolute container symlink: %v", err)
+	}
+
+	want, err := filesystemDevice(physicalTarget)
+	if err != nil {
+		t.Fatalf("inspect physical container target: %v", err)
+	}
+	got, err := filesystemDeviceInContainerRoot(containerRoot, "/config")
+	if err != nil {
+		t.Fatalf("inspect absolute symlink inside container root: %v", err)
+	}
+	if got != want {
+		t.Fatalf("container-root symlink device = %d, want %d", got, want)
+	}
+}
+
+func TestFilesystemDeviceInContainerRootResolvesRelativeSymlink(t *testing.T) {
+	containerRoot := t.TempDir()
+	physicalTarget := filepath.Join(containerRoot, "workspace")
+	if err := os.Mkdir(physicalTarget, 0o755); err != nil {
+		t.Fatalf("create container workspace target: %v", err)
+	}
+	if err := os.Symlink("workspace", filepath.Join(containerRoot, "config")); err != nil {
+		t.Fatalf("create relative container symlink: %v", err)
+	}
+
+	want, err := filesystemDevice(physicalTarget)
+	if err != nil {
+		t.Fatalf("inspect physical container target: %v", err)
+	}
+	got, err := filesystemDeviceInContainerRoot(containerRoot, "/config")
+	if err != nil {
+		t.Fatalf("inspect relative symlink inside container root: %v", err)
+	}
+	if got != want {
+		t.Fatalf("container-root relative symlink device = %d, want %d", got, want)
+	}
+}
+
+func TestFilesystemDeviceInContainerRootRejectsSymlinkLoop(t *testing.T) {
+	containerRoot := t.TempDir()
+	if err := os.Symlink("/config-b", filepath.Join(containerRoot, "config-a")); err != nil {
+		t.Fatalf("create first container symlink: %v", err)
+	}
+	if err := os.Symlink("/config-a", filepath.Join(containerRoot, "config-b")); err != nil {
+		t.Fatalf("create second container symlink: %v", err)
+	}
+
+	_, err := filesystemDeviceInContainerRoot(containerRoot, "/config-a")
+	if err == nil || !strings.Contains(err.Error(), "exceeds 40 symbolic links") {
+		t.Fatalf("filesystemDeviceInContainerRoot() error = %v, want a bounded symlink-loop error", err)
+	}
+}
+
 func TestContainerVolumeTargetPathRejectsRelativeMountPath(t *testing.T) {
 	if target, err := containerVolumeTargetPath(os.Getpid(), "workspace"); err == nil || target != "" {
 		t.Fatalf("containerVolumeTargetPath() = %q, %v; want a relative-path error", target, err)
