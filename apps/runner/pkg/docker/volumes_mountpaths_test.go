@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/daytonaio/runner/pkg/api/dto"
 )
 
 const testVolumeID = "01932f6e-9df2-7b10-bb66-e198b7c8834a"
@@ -114,6 +116,18 @@ func TestGetMountArgsRejectsUnsafeSingleBucketConfiguration(t *testing.T) {
 			}
 			if args, err := client.getMountArgs(testVolumeID, "/mnt/test"); err == nil || args != nil {
 				t.Fatalf("getMountArgs() = %#v, %v; want nil args and an error", args, err)
+			}
+		})
+	}
+}
+
+func TestResolveVolumeMountPathsRejectsEscapingSubpaths(t *testing.T) {
+	for _, subpath := range []string{"../workspace", "../../outside", "/absolute/workspace"} {
+		t.Run(subpath, func(t *testing.T) {
+			volume := dto.VolumeDTO{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath}
+			baseMountPath, bindSource, err := resolveVolumeMountPaths(volume)
+			if err == nil || baseMountPath != "" || bindSource != "" {
+				t.Fatalf("resolveVolumeMountPaths(%q) = %q, %q, %v; want empty paths and an error", subpath, baseMountPath, bindSource, err)
 			}
 		})
 	}

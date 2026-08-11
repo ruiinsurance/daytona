@@ -45,25 +45,48 @@ func getVolumeMountBasePath() string {
 	return "/mnt"
 }
 
+func resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
+	if !isValidVolumeId(vol.VolumeId) {
+		return "", "", fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
+	}
+
+	volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
+	mountBase := filepath.Clean(getVolumeMountBasePath())
+	baseMountPath = filepath.Join(mountBase, volumeIdPrefixed)
+	if filepath.Dir(baseMountPath) != mountBase || filepath.Base(baseMountPath) != volumeIdPrefixed {
+		return "", "", fmt.Errorf("invalid volumeId %q: resolves outside volume mount base", vol.VolumeId)
+	}
+
+	bindSource = baseMountPath
+	if vol.Subpath == nil || *vol.Subpath == "" {
+		return baseMountPath, bindSource, nil
+	}
+	if filepath.IsAbs(*vol.Subpath) {
+		return "", "", fmt.Errorf("invalid subpath %q: expected a relative path", *vol.Subpath)
+	}
+
+	bindSource = filepath.Join(baseMountPath, *vol.Subpath)
+	relativePath, err := filepath.Rel(baseMountPath, bindSource)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("invalid subpath %q: resolves outside volume mount", *vol.Subpath)
+	}
+
+	return baseMountPath, bindSource, nil
+}
+
 func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
 	// Phase 1: fan out FUSE mounts for unique volumes in parallel. Each
 	// ensureVolumeFuseMounted runs mount-s3 and then waits up to 5s for the
 	// mount to become ready; doing them sequentially made create-time scale
 	// linearly with the number of mounted volumes.
 	uniqueMounts := make(map[string]string, len(volumes)) // volumeIdPrefixed -> baseMountPath
-	mountBase := filepath.Clean(getVolumeMountBasePath())
 	for _, vol := range volumes {
-		if !isValidVolumeId(vol.VolumeId) {
-			return nil, fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
+		baseMountPath, _, err := resolveVolumeMountPaths(vol)
+		if err != nil {
+			return nil, err
 		}
-		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
+		volumeIdPrefixed := filepath.Base(baseMountPath)
 		if _, ok := uniqueMounts[volumeIdPrefixed]; !ok {
-			baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
-			// Defense in depth: the path must stay a direct child of mountBase so a
-			// traversal string can never escape it or collide with another volume.
-			if filepath.Dir(baseMountPath) != mountBase || filepath.Base(baseMountPath) != volumeIdPrefixed {
-				return nil, fmt.Errorf("invalid volumeId %q: resolves outside volume mount base", vol.VolumeId)
-			}
 			uniqueMounts[volumeIdPrefixed] = baseMountPath
 		}
 	}
@@ -99,28 +122,23 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 	// kept sequential so the returned slice order matches volumes.
 	volumeMountPathBinds := make([]string, 0, len(volumes))
 	for _, vol := range volumes {
-		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
-		baseMountPath := uniqueMounts[volumeIdPrefixed]
-
+		_, bindSource, err := resolveVolumeMountPaths(vol)
+		if err != nil {
+			return nil, err
+		}
 		subpathStr := ""
 		if vol.Subpath != nil {
 			subpathStr = *vol.Subpath
 		}
 
-		bindSource := baseMountPath
 		if vol.Subpath != nil && *vol.Subpath != "" {
-			bindSource = filepath.Join(baseMountPath, *vol.Subpath)
-			// Ensure the resolved path stays within baseMountPath to prevent path traversal
-			if !strings.HasPrefix(filepath.Clean(bindSource), filepath.Clean(baseMountPath)) {
-				return nil, fmt.Errorf("invalid subpath %q: resolves outside volume mount", *vol.Subpath)
-			}
 			err := os.MkdirAll(bindSource, 0755)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)
 			}
 		}
 
-		d.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
+		d.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeMountPrefix+vol.VolumeId, "subpath", subpathStr, "mountPath", vol.MountPath)
 		volumeMountPathBinds = append(volumeMountPathBinds, fmt.Sprintf("%s/:%s/", bindSource, vol.MountPath))
 	}
 

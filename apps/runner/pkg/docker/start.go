@@ -18,6 +18,8 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 )
 
+type containerVolumeMountVerifier func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error
+
 func (d *DockerClient) Start(ctx context.Context, containerId string, authToken *string, metadata map[string]string) (*container.InspectResponse, string, error) {
 	defer timer.Timer()()
 
@@ -32,7 +34,25 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 		return nil, "", err
 	}
 
+	var volumes []dto.VolumeDTO
+	if volumesJSON, ok := metadata["volumes"]; ok {
+		if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
+			volumeErr := fmt.Errorf("invalid persisted volume metadata: %w", err)
+			return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
+		}
+		if len(volumes) > 0 {
+			if _, err = d.getVolumesMountPathBinds(ctx, volumes); err != nil {
+				volumeErr := fmt.Errorf("failed to ensure volume FUSE mounts: %w", err)
+				return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
+			}
+		}
+	}
+
 	if c.State.Running {
+		if err := d.verifyContainerVolumeMounts(ctx, c, volumes); err != nil {
+			return nil, "", d.failClosedContainerVolumeMount(ctx, c, err)
+		}
+
 		containerIP := GetContainerIpAddress(ctx, c)
 		if containerIP == "" {
 			return nil, "", errors.New("sandbox IP not found? Is the sandbox started?")
@@ -53,19 +73,6 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 		return c, daemonVersion, nil
 	}
 
-	// Re-establish FUSE mounts that may have died since the container was last running.
-	if volumesJSON, ok := metadata["volumes"]; ok {
-		var volumes []dto.VolumeDTO
-		if err := json.Unmarshal([]byte(volumesJSON), &volumes); err != nil {
-			return nil, "", fmt.Errorf("invalid persisted volume metadata: %w", err)
-		}
-		if len(volumes) > 0 {
-			if _, err = d.getVolumesMountPathBinds(ctx, volumes); err != nil {
-				return nil, "", fmt.Errorf("failed to ensure volume FUSE mounts: %w", err)
-			}
-		}
-	}
-
 	err = d.apiClient.ContainerStart(ctx, containerId, container.StartOptions{})
 	if err != nil {
 		return nil, "", err
@@ -75,6 +82,9 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	runningContainer, err := d.waitForContainerRunning(ctx, containerId)
 	if err != nil {
 		return nil, "", err
+	}
+	if err := d.verifyContainerVolumeMounts(ctx, runningContainer, volumes); err != nil {
+		return nil, "", d.failClosedContainerVolumeMount(ctx, runningContainer, err)
 	}
 
 	containerIP := GetContainerIpAddress(ctx, runningContainer)
