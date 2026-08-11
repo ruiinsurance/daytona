@@ -237,4 +237,5 @@ type DockerClient struct {
 	gpuType                      string
 	gpuAllocator                 *gpuAllocator
 	mountKvmToAndroidSandbox     bool
+	containerVolumeMountVerifier containerVolumeMountVerifier
 }
