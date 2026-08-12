@@ -24,6 +24,7 @@ const volumeMountPrefix = "daytona-volume-"
 const (
 	perVolumeBucketLayout    = "per-volume-bucket"
 	singleBucketPrefixLayout = "single-bucket-prefix"
+	volumeMountReadyTimeout  = 5 * time.Second
 )
 
 // volumeId becomes part of the host mount path and the S3 bucket name, so require
@@ -44,25 +45,48 @@ func getVolumeMountBasePath() string {
 	return "/mnt"
 }
 
+func resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
+	if !isValidVolumeId(vol.VolumeId) {
+		return "", "", fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
+	}
+
+	volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
+	mountBase := filepath.Clean(getVolumeMountBasePath())
+	baseMountPath = filepath.Join(mountBase, volumeIdPrefixed)
+	if filepath.Dir(baseMountPath) != mountBase || filepath.Base(baseMountPath) != volumeIdPrefixed {
+		return "", "", fmt.Errorf("invalid volumeId %q: resolves outside volume mount base", vol.VolumeId)
+	}
+
+	bindSource = baseMountPath
+	if vol.Subpath == nil || *vol.Subpath == "" {
+		return baseMountPath, bindSource, nil
+	}
+	if filepath.IsAbs(*vol.Subpath) {
+		return "", "", fmt.Errorf("invalid subpath %q: expected a relative path", *vol.Subpath)
+	}
+
+	bindSource = filepath.Join(baseMountPath, *vol.Subpath)
+	relativePath, err := filepath.Rel(baseMountPath, bindSource)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("invalid subpath %q: resolves outside volume mount", *vol.Subpath)
+	}
+
+	return baseMountPath, bindSource, nil
+}
+
 func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
 	// Phase 1: fan out FUSE mounts for unique volumes in parallel. Each
 	// ensureVolumeFuseMounted runs mount-s3 and then waits up to 5s for the
 	// mount to become ready; doing them sequentially made create-time scale
 	// linearly with the number of mounted volumes.
 	uniqueMounts := make(map[string]string, len(volumes)) // volumeIdPrefixed -> baseMountPath
-	mountBase := filepath.Clean(getVolumeMountBasePath())
 	for _, vol := range volumes {
-		if !isValidVolumeId(vol.VolumeId) {
-			return nil, fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
+		baseMountPath, _, err := resolveVolumeMountPaths(vol)
+		if err != nil {
+			return nil, err
 		}
-		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
+		volumeIdPrefixed := filepath.Base(baseMountPath)
 		if _, ok := uniqueMounts[volumeIdPrefixed]; !ok {
-			baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeIdPrefixed)
-			// Defense in depth: the path must stay a direct child of mountBase so a
-			// traversal string can never escape it or collide with another volume.
-			if filepath.Dir(baseMountPath) != mountBase || filepath.Base(baseMountPath) != volumeIdPrefixed {
-				return nil, fmt.Errorf("invalid volumeId %q: resolves outside volume mount base", vol.VolumeId)
-			}
 			uniqueMounts[volumeIdPrefixed] = baseMountPath
 		}
 	}
@@ -98,28 +122,23 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 	// kept sequential so the returned slice order matches volumes.
 	volumeMountPathBinds := make([]string, 0, len(volumes))
 	for _, vol := range volumes {
-		volumeIdPrefixed := fmt.Sprintf("%s%s", volumeMountPrefix, vol.VolumeId)
-		baseMountPath := uniqueMounts[volumeIdPrefixed]
-
+		_, bindSource, err := resolveVolumeMountPaths(vol)
+		if err != nil {
+			return nil, err
+		}
 		subpathStr := ""
 		if vol.Subpath != nil {
 			subpathStr = *vol.Subpath
 		}
 
-		bindSource := baseMountPath
 		if vol.Subpath != nil && *vol.Subpath != "" {
-			bindSource = filepath.Join(baseMountPath, *vol.Subpath)
-			// Ensure the resolved path stays within baseMountPath to prevent path traversal
-			if !strings.HasPrefix(filepath.Clean(bindSource), filepath.Clean(baseMountPath)) {
-				return nil, fmt.Errorf("invalid subpath %q: resolves outside volume mount", *vol.Subpath)
-			}
 			err := os.MkdirAll(bindSource, 0755)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)
 			}
 		}
 
-		d.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeIdPrefixed, "subpath", subpathStr, "mountPath", vol.MountPath)
+		d.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeMountPrefix+vol.VolumeId, "subpath", subpathStr, "mountPath", vol.MountPath)
 		volumeMountPathBinds = append(volumeMountPathBinds, fmt.Sprintf("%s/:%s/", bindSource, vol.MountPath))
 	}
 
@@ -139,6 +158,9 @@ func (d *DockerClient) ensureVolumeFuseMounted(ctx context.Context, volumeId str
 	defer volumeMutex.Unlock()
 
 	if d.isDirectoryMounted(mountPath) {
+		if err := d.waitForMountReady(ctx, mountPath); err != nil {
+			return fmt.Errorf("existing S3 volume mount %s is not ready: %w", mountPath, err)
+		}
 		d.logger.DebugContext(ctx, "volume already mounted", "volumeId", volumeId, "mountPath", mountPath)
 		return nil
 	}
@@ -201,12 +223,51 @@ func (d *DockerClient) isDirectoryMounted(path string) bool {
 	return err == nil
 }
 
+func probeMountDirectory(ctx context.Context, path string) error {
+	result := make(chan error, 1)
+	go func() {
+		info, err := os.Stat(path)
+		if err != nil {
+			result <- err
+			return
+		}
+		if !info.IsDir() {
+			result <- fmt.Errorf("mount path is not a directory")
+			return
+		}
+
+		dir, err := os.Open(path)
+		if err != nil {
+			result <- err
+			return
+		}
+		defer dir.Close()
+
+		_, err = dir.Readdirnames(1)
+		if err == io.EOF {
+			err = nil
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // waitForMountReady waits for a FUSE mount to be fully accessible
 // FUSE mounts can be asynchronous - the mount command may return before the filesystem is ready
 // This prevents a race condition where the container writes to the directory before the mount is ready
 func (d *DockerClient) waitForMountReady(ctx context.Context, path string) error {
+	readyCtx, cancel := context.WithTimeout(ctx, volumeMountReadyTimeout)
+	defer cancel()
+
 	maxAttempts := 50 // 5 seconds total (50 * 100ms)
 	sleepDuration := 100 * time.Millisecond
+	var lastErr error
 
 	for i := 0; i < maxAttempts; i++ {
 		// First verify the mountpoint is still registered
@@ -214,28 +275,23 @@ func (d *DockerClient) waitForMountReady(ctx context.Context, path string) error
 			return fmt.Errorf("mount disappeared during readiness check")
 		}
 
-		// Try to stat the mount point to ensure filesystem is responsive
-		// This will fail if FUSE is not ready yet
-		_, err := os.Stat(path)
-		if err == nil {
-			// Try to read directory to ensure it's fully operational
-			_, err = os.ReadDir(path)
-			if err == nil {
-				d.logger.InfoContext(ctx, "mount is ready", "path", path, "attempts", i+1)
-				return nil
-			}
+		if err := probeMountDirectory(readyCtx, path); err == nil {
+			d.logger.InfoContext(ctx, "mount is ready", "path", path, "attempts", i+1)
+			return nil
+		} else {
+			lastErr = err
 		}
 
 		// Wait a bit before retrying
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for mount ready: %w", ctx.Err())
+		case <-readyCtx.Done():
+			return fmt.Errorf("mount readiness probe failed: %w", lastErr)
 		case <-time.After(sleepDuration):
 			// Continue to next iteration
 		}
 	}
 
-	return fmt.Errorf("mount did not become ready within timeout")
+	return fmt.Errorf("mount did not become ready within timeout: %w", lastErr)
 }
 
 func (d *DockerClient) getMountArgs(volumeId string, path string) ([]string, error) {
