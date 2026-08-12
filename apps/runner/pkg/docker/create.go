@@ -6,7 +6,6 @@ package docker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -22,6 +21,22 @@ import (
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
 )
+
+func getSandboxStartMetadata(sandboxDto dto.CreateSandboxDTO) (map[string]string, error) {
+	metadata := maps.Clone(sandboxDto.Metadata)
+	if len(sandboxDto.Volumes) == 0 {
+		return metadata, nil
+	}
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	volumesJSON, err := json.Marshal(sandboxDto.Volumes)
+	if err != nil {
+		return nil, fmt.Errorf("serialize sandbox volumes for start: %w", err)
+	}
+	metadata["volumes"] = string(volumesJSON)
+	return metadata, nil
+}
 
 func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (string, string, error) {
 	defer timer.Timer()()
@@ -69,37 +84,19 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 	}
 
 	if state == enums.SandboxStateStarted || state == enums.SandboxStateStarting {
-		c, err := d.ContainerInspect(ctx, sandboxDto.Id)
-		if err != nil {
-			return "", "", err
-		}
-
 		// Re-assert link-network wiring on retries so idempotent creates still end
 		// up with both sandboxes connected to the shared network.
 		if _, err := d.reconcileFollowerLinkNetwork(ctx, sandboxDto); err != nil {
 			return "", "", err
 		}
-
-		containerIP := GetContainerIpAddress(ctx, c)
-		if containerIP == "" {
-			return "", "", errors.New("sandbox IP not found? Is the sandbox started?")
-		}
-
-		// Android-device sandboxes do not run the daytona daemon; their readiness is
-		// signaled by the ADB port accepting TCP connections. Match Start's behavior
-		// by branching on the inspected container label rather than the DTO.
-		if isAndroidDeviceContainer(c) {
-			if err := d.waitForAdbRunning(ctx, containerIP); err != nil {
-				return "", "", err
-			}
-			return sandboxDto.Id, "", nil
-		}
-
-		daemonVersion, err := d.waitForDaemonRunning(ctx, containerIP, sandboxDto.AuthToken)
+		startMetadata, err := getSandboxStartMetadata(sandboxDto)
 		if err != nil {
 			return "", "", err
 		}
-
+		_, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, startMetadata)
+		if err != nil {
+			return "", "", err
+		}
 		return sandboxDto.Id, daemonVersion, nil
 	}
 
@@ -110,15 +107,9 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 			return "", "", err
 		}
 
-		metadata := maps.Clone(sandboxDto.Metadata)
-		if len(sandboxDto.Volumes) > 0 {
-			if metadata == nil {
-				metadata = make(map[string]string)
-			}
-			volumesJSON, err := json.Marshal(sandboxDto.Volumes)
-			if err == nil {
-				metadata["volumes"] = string(volumesJSON)
-			}
+		metadata, err := getSandboxStartMetadata(sandboxDto)
+		if err != nil {
+			return "", "", err
 		}
 		_, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, metadata)
 		if err != nil {
@@ -231,7 +222,11 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return c.ID, "", nil
 	}
 
-	runningContainer, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, sandboxDto.Metadata)
+	startMetadata, err := getSandboxStartMetadata(sandboxDto)
+	if err != nil {
+		return "", "", err
+	}
+	runningContainer, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, startMetadata)
 	if err != nil {
 		return "", "", err
 	}
