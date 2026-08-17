@@ -62,6 +62,42 @@ import { SandboxActivityService } from './services/sandbox-activity.service'
 import { OpensearchModule } from 'nestjs-opensearch'
 import { TypedConfigService } from '../config/typed-config.service'
 import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provider'
+import { StorageNode } from './entities/storage-node.entity'
+import { WorkspacePlacement } from './entities/workspace-placement.entity'
+import { StorageNodeService } from './services/storage-node.service'
+import { WorkspacePlacementService } from './services/workspace-placement.service'
+import { StorageNodeRunnerController } from './controllers/storage-node-runner.controller'
+import { StorageNodeController } from './controllers/storage-node.controller'
+import { WorkspaceGeneration } from './entities/workspace-generation.entity'
+import { WorkspaceOperation } from './entities/workspace-operation.entity'
+import { WorkspaceGenerationService } from './services/workspace-generation.service'
+import { S3Client } from '@aws-sdk/client-s3'
+import {
+  RunnerStorageAgentCheckpointSource,
+  RunnerStorageAgentClient,
+  RunnerStorageAgentMoveRuntime,
+} from './local-first/runner-storage-agent'
+import {
+  LOCAL_FIRST_GENERATION_BATCH_SIZE,
+  LOCAL_FIRST_GENERATION_PREFIX,
+  LOCAL_FIRST_GENERATION_RECONCILER,
+  LOCAL_FIRST_GENERATION_SOURCE,
+  LOCAL_FIRST_GENERATION_STORE,
+} from './local-first/workspace-generation.tokens'
+import { S3GenerationObjectStore } from './services/workspace-generation.service'
+import {
+  WorkspaceGenerationReconciler,
+  WorkspaceGenerationWorker,
+} from './services/workspace-generation-worker.service'
+import { WorkspaceMoveService } from './services/workspace-move.service'
+import { WorkspaceMoveReconciler, WorkspaceMoveWorker } from './services/workspace-move-worker.service'
+import { WorkspaceDrainService } from './services/workspace-drain.service'
+import { WorkspaceDrainWorker } from './services/workspace-drain-worker.service'
+import { WorkspaceMoveController } from './controllers/workspace-move.controller'
+import {
+  LOCAL_FIRST_MOVE_RECONCILER,
+  LOCAL_FIRST_MOVE_RUNTIME,
+} from './local-first/workspace-move.tokens'
 
 @Module({
   imports: [
@@ -84,6 +120,10 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
       Job,
       SandboxLastActivity,
       SandboxFork,
+      StorageNode,
+      WorkspacePlacement,
+      WorkspaceGeneration,
+      WorkspaceOperation,
     ]),
     OpensearchModule.forRootAsync({
       inject: [TypedConfigService],
@@ -100,6 +140,9 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
     PreviewController,
     VolumeController,
     JobController,
+    StorageNodeRunnerController,
+    StorageNodeController,
+    WorkspaceMoveController,
   ],
   providers: [
     SandboxService,
@@ -125,6 +168,17 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
     JobService,
     JobStateHandlerService,
     SandboxActivityService,
+    StorageNodeService,
+    WorkspacePlacementService,
+    WorkspaceGenerationService,
+    WorkspaceGenerationReconciler,
+    WorkspaceGenerationWorker,
+    WorkspaceMoveService,
+    WorkspaceMoveReconciler,
+    WorkspaceMoveWorker,
+    WorkspaceDrainService,
+    WorkspaceDrainWorker,
+    RunnerStorageAgentClient,
     ProxyAuthContextGuard,
     SshGatewayAuthContextGuard,
     SandboxSearchAdapterProvider,
@@ -143,6 +197,66 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
       useFactory: (dataSource: DataSource, eventEmitter: EventEmitter2) =>
         new SnapshotRepository(dataSource, eventEmitter),
     },
+    {
+      provide: LOCAL_FIRST_GENERATION_PREFIX,
+      inject: [TypedConfigService],
+      useFactory: (configService: TypedConfigService) => configService.get('localFirstGeneration.prefix'),
+    },
+    {
+      provide: LOCAL_FIRST_GENERATION_BATCH_SIZE,
+      inject: [TypedConfigService],
+      useFactory: (configService: TypedConfigService) => configService.get('localFirstGeneration.batchSize'),
+    },
+    {
+      provide: LOCAL_FIRST_GENERATION_SOURCE,
+      inject: [TypedConfigService, RunnerStorageAgentClient],
+      useFactory: (configService: TypedConfigService, client: RunnerStorageAgentClient) => {
+        if (!configService.get('localFirstGeneration.enabled')) return undefined
+        return new RunnerStorageAgentCheckpointSource(client)
+      },
+    },
+    {
+      provide: LOCAL_FIRST_GENERATION_STORE,
+      inject: [TypedConfigService],
+      useFactory: (configService: TypedConfigService) => {
+        if (!configService.get('localFirstGeneration.enabled')) return undefined
+        const endpoint = configService.getOrThrow('s3.endpoint')
+        const region = configService.getOrThrow('s3.region')
+        const bucket = configService.getOrThrow('s3.defaultBucket')
+        const accessKey = configService.getOrThrow('s3.accessKey')
+        const secretKey = configService.getOrThrow('s3.secretKey')
+        return new S3GenerationObjectStore(
+          new S3Client({
+            endpoint,
+            region,
+            forcePathStyle: configService.get('s3.forcePathStyle'),
+            credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
+          }),
+          bucket,
+          configService.get('localFirstGeneration.prefix'),
+        )
+      },
+    },
+    {
+      provide: LOCAL_FIRST_GENERATION_RECONCILER,
+      useExisting: WorkspaceGenerationReconciler,
+    },
+    {
+      provide: LOCAL_FIRST_MOVE_RUNTIME,
+      inject: [TypedConfigService, RunnerStorageAgentClient, WorkspacePlacementService],
+      useFactory: (
+        configService: TypedConfigService,
+        client: RunnerStorageAgentClient,
+        workspacePlacementService: WorkspacePlacementService,
+      ) => {
+        if (!configService.get('localFirstGeneration.enabled')) return undefined
+        return new RunnerStorageAgentMoveRuntime(client, workspacePlacementService)
+      },
+    },
+    {
+      provide: LOCAL_FIRST_MOVE_RECONCILER,
+      useExisting: WorkspaceMoveReconciler,
+    },
   ],
   exports: [
     SandboxService,
@@ -157,6 +271,10 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
     SandboxActivityService,
     ProxyAuthContextGuard,
     SshGatewayAuthContextGuard,
+    StorageNodeService,
+    WorkspacePlacementService,
+    WorkspaceGenerationService,
+    WorkspaceMoveService,
   ],
 })
 export class SandboxModule {}

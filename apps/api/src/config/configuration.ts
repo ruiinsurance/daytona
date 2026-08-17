@@ -96,6 +96,12 @@ const configuration = {
     accountId: process.env.S3_ACCOUNT_ID,
     roleName: process.env.S3_ROLE_NAME,
   },
+  localFirstGeneration: {
+    enabled: process.env.LOCAL_FIRST_GENERATION_ENABLED === 'true',
+    checkpointRoot: process.env.LOCAL_FIRST_CHECKPOINT_ROOT || '/srv/kortix-storage/checkpoints',
+    prefix: process.env.LOCAL_FIRST_COS_PREFIX || 'local-first',
+    batchSize: parseInt(process.env.LOCAL_FIRST_GENERATION_BATCH_SIZE || '25', 10),
+  },
   notificationGatewayDisabled: process.env.NOTIFICATION_GATEWAY_DISABLED === 'true',
   skipConnections: process.env.SKIP_CONNECTIONS === 'true',
   maxAutoArchiveInterval: parseInt(process.env.MAX_AUTO_ARCHIVE_INTERVAL || '43200', 10),

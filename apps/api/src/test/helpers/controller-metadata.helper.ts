@@ -4,6 +4,7 @@
  */
 
 import 'reflect-metadata'
+import { afterAll, expect } from 'vitest'
 import { CanActivate, Type } from '@nestjs/common'
 import { PATH_METADATA } from '@nestjs/common/constants'
 import { AuthContextGuard } from '../../common/guards/auth-context.guard'

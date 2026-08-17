@@ -1,0 +1,116 @@
+import { RunnerAdapterV2 } from './runnerAdapter.v2'
+import { StorageNodeState } from '../enums/storage-node-state.enum'
+
+const RUNNER_ID = '11111111-1111-4111-8111-111111111111'
+const NODE_ID = '22222222-2222-4222-8222-222222222222'
+const SANDBOX_ID = '33333333-3333-4333-8333-333333333333'
+const VOLUME_ID = '44444444-4444-4444-8444-444444444444'
+const SUBPATH = `sandboxes/${SANDBOX_ID}/workspace`
+
+function sandbox() {
+  return {
+    id: SANDBOX_ID,
+    name: 'local-first-test',
+    organizationId: '55555555-5555-4555-8555-555555555555',
+    region: 'region-test',
+    osUser: 'daytona',
+    cpu: 2,
+    gpu: 0,
+    mem: 4,
+    disk: 10,
+    env: {},
+    volumes: [
+      { volumeId: VOLUME_ID, mountPath: '/workspace', subpath: SUBPATH },
+      { volumeId: VOLUME_ID, mountPath: '/config', subpath: SUBPATH },
+    ],
+    networkBlockAll: false,
+    networkAllowList: undefined,
+    domainAllowList: undefined,
+    authToken: 'sandbox-auth-token',
+    sandboxClass: 'container',
+    linkedSandboxId: null,
+  }
+}
+
+function createAdapter() {
+  const jobService = { createJob: jest.fn().mockResolvedValue(undefined) }
+  const storageNodeService = {
+    findByRunnerId: jest.fn().mockResolvedValue({
+      nodeId: NODE_ID,
+      runnerId: RUNNER_ID,
+      state: StorageNodeState.ACTIVE,
+    }),
+  }
+  const workspacePlacementService = {
+    findBySandboxId: jest.fn().mockResolvedValue(null),
+    ensurePlacement: jest.fn().mockResolvedValue({
+      id: '66666666-6666-4666-8666-666666666666',
+      ownerNodeId: NODE_ID,
+      fenceEpoch: '1',
+    }),
+    acquireWriterLease: jest.fn().mockResolvedValue({
+      fenceEpoch: '1',
+      leaseOwner: `runner:${RUNNER_ID}:sandbox:${SANDBOX_ID}`,
+      leaseExpiresAt: new Date(Date.now() + 30_000),
+    }),
+  }
+  const adapter = new RunnerAdapterV2(
+    {} as any,
+    {} as any,
+    jobService as any,
+    storageNodeService as any,
+    workspacePlacementService as any,
+  )
+  return { adapter, jobService, storageNodeService, workspacePlacementService }
+}
+
+describe('RunnerAdapterV2 local-first storage', () => {
+  it('acquires placement lease before adding local node/fence evidence to both aliases', async () => {
+    const { adapter, jobService, workspacePlacementService } = createAdapter()
+    await adapter.init({ id: RUNNER_ID, apiVersion: '2' } as any)
+
+    await adapter.createSandbox(sandbox() as any, 'snapshot-test', undefined, undefined, {
+      storageBackend: 'local-first',
+    })
+
+    const payload = jobService.createJob.mock.calls[0][5]
+    expect(workspacePlacementService.ensurePlacement).toHaveBeenCalledWith(expect.objectContaining({
+      volumeId: VOLUME_ID,
+      subpath: SUBPATH,
+      sandboxId: SANDBOX_ID,
+      ownerNodeId: NODE_ID,
+    }))
+    expect(workspacePlacementService.acquireWriterLease).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: NODE_ID,
+      fenceEpoch: 1,
+    }))
+    expect(payload.volumes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        mountPath: '/workspace',
+        backend: 'local-first',
+        nodeId: NODE_ID,
+        fenceEpoch: '1',
+      }),
+      expect.objectContaining({
+        mountPath: '/config',
+        backend: 'local-first',
+        nodeId: NODE_ID,
+        fenceEpoch: '1',
+      }),
+    ]))
+  })
+
+  it('keeps the legacy payload unchanged when local-first is not requested', async () => {
+    const { adapter, jobService, workspacePlacementService } = createAdapter()
+    await adapter.init({ id: RUNNER_ID, apiVersion: '2' } as any)
+
+    await adapter.createSandbox(sandbox() as any, 'snapshot-test')
+
+    const payload = jobService.createJob.mock.calls[0][5]
+    expect(payload.volumes).toEqual([
+      { volumeId: VOLUME_ID, mountPath: '/workspace', subpath: SUBPATH },
+      { volumeId: VOLUME_ID, mountPath: '/config', subpath: SUBPATH },
+    ])
+    expect(workspacePlacementService.ensurePlacement).not.toHaveBeenCalled()
+  })
+})

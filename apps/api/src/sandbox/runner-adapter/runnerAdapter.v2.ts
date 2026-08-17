@@ -43,6 +43,9 @@ import {
   RecoverSandboxDTO,
 } from '@daytona/runner-api-client'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
+import { LOCAL_FIRST_STORAGE_BACKEND } from '../local-first/storage-node-contract'
+import { StorageNodeService } from '../services/storage-node.service'
+import { WorkspacePlacementService } from '../services/workspace-placement.service'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -59,6 +62,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     @InjectRepository(Job)
     protected readonly jobRepository: Repository<Job>,
     protected readonly jobService: JobService,
+    protected readonly storageNodeService: StorageNodeService,
+    protected readonly workspacePlacementService: WorkspacePlacementService,
   ) {}
 
   async init(runner: Runner): Promise<void> {
@@ -157,6 +162,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     otelEndpoint?: string,
     skipStart?: boolean,
   ): Promise<StartSandboxResponse | undefined> {
+    const localFirstRequested = metadata?.storageBackend === LOCAL_FIRST_STORAGE_BACKEND
+      || sandbox.volumes?.some((volume) => volume.backend === LOCAL_FIRST_STORAGE_BACKEND)
+    const volumes = await this.buildRunnerVolumes(sandbox, localFirstRequested)
     const payload: CreateSandboxDTO = {
       id: sandbox.id,
       name: sandbox.name,
@@ -177,11 +185,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
           }
         : undefined,
       entrypoint: entrypoint,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes,
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
@@ -215,15 +219,97 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartSandboxResponse | undefined> {
+    let effectiveMetadata = metadata
+    if (metadata?.storageBackend === LOCAL_FIRST_STORAGE_BACKEND) {
+      const sandbox = await this.sandboxRepository.findOne({ where: { id: sandboxId } })
+      if (!sandbox) throw new Error('Sandbox not found for local-first start')
+      const volumes = await this.buildRunnerVolumes(sandbox, true)
+      effectiveMetadata = {
+        ...metadata,
+        volumes: JSON.stringify(volumes),
+      }
+    } else {
+      const placement = await this.workspacePlacementService.findBySandboxId(sandboxId)
+      if (placement) {
+        const sandbox = await this.sandboxRepository.findOne({ where: { id: sandboxId } })
+        if (!sandbox) throw new Error('Sandbox not found for local-first placement')
+        const volumes = await this.buildRunnerVolumes(sandbox, true)
+        effectiveMetadata = {
+          ...metadata,
+          storageBackend: LOCAL_FIRST_STORAGE_BACKEND,
+          volumes: JSON.stringify(volumes),
+        }
+      }
+    }
     await this.jobService.createJob(null, JobType.START_SANDBOX, this.runner.id, ResourceType.SANDBOX, sandboxId, {
       authToken,
-      metadata,
+      metadata: effectiveMetadata,
     })
 
     this.logger.debug(`Created START_SANDBOX job for sandbox ${sandboxId} on runner ${this.runner.id}`)
 
     // Daemon version will be set in the job result metadata
     return undefined
+  }
+
+  private async buildRunnerVolumes(sandbox: Sandbox, localFirst: boolean): Promise<Array<Record<string, string>>> {
+    const volumes = sandbox.volumes?.map((volume) => ({
+      volumeId: volume.volumeId,
+      mountPath: volume.mountPath,
+      ...(volume.subpath ? { subpath: volume.subpath } : {}),
+    })) ?? []
+    if (!localFirst) return volumes
+
+    const workspace = sandbox.volumes?.find((volume) => volume.mountPath === '/workspace')
+    const config = sandbox.volumes?.find((volume) => volume.mountPath === '/config')
+    if (
+      !workspace
+      || !config
+      || workspace.volumeId !== config.volumeId
+      || workspace.subpath !== config.subpath
+      || workspace.subpath !== `sandboxes/${sandbox.id}/workspace`
+    ) {
+      throw new Error('local-first workspace requires matching /workspace and /config identity')
+    }
+
+    const storageNode = await this.storageNodeService.findByRunnerId(this.runner.id)
+    if (!storageNode) throw new Error('local-first storage node is not registered')
+    const placement = await this.workspacePlacementService.ensurePlacement({
+      volumeId: workspace.volumeId,
+      subpath: workspace.subpath,
+      sandboxId: sandbox.id,
+      requiredBytes: Math.max(0, sandbox.disk) * 1024 * 1024 * 1024,
+      requiredInodes: 1,
+      ownerNodeId: storageNode.nodeId,
+    })
+    const fenceEpoch = Number(placement.fenceEpoch)
+    if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch <= 0 || placement.ownerNodeId !== storageNode.nodeId) {
+      throw new Error('local-first placement fence is invalid')
+    }
+    const leaseOwner = `runner:${this.runner.id}:sandbox:${sandbox.id}`
+    const leased = await this.workspacePlacementService.acquireWriterLease({
+      placementId: placement.id,
+      nodeId: storageNode.nodeId,
+      fenceEpoch,
+      leaseOwner,
+    })
+    if (!leased.leaseExpiresAt) throw new Error('local-first writer lease has no expiry')
+    const leaseExpiresAt = leased.leaseExpiresAt instanceof Date
+      ? leased.leaseExpiresAt
+      : new Date(leased.leaseExpiresAt)
+    if (!Number.isFinite(leaseExpiresAt.getTime())) throw new Error('local-first writer lease expiry is invalid')
+
+    return volumes.map((volume) => {
+      if (volume.mountPath !== '/workspace' && volume.mountPath !== '/config') return volume
+      return {
+        ...volume,
+        backend: LOCAL_FIRST_STORAGE_BACKEND,
+        nodeId: storageNode.nodeId,
+        fenceEpoch: String(leased.fenceEpoch),
+        leaseOwner,
+        leaseExpiresAt: leaseExpiresAt.toISOString(),
+      }
+    })
   }
 
   async stopSandbox(sandboxId: string, force?: boolean): Promise<void> {

@@ -5,7 +5,7 @@
 
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { SandboxState } from '../enums/sandbox-state.enum'
-import { IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator'
+import { IsEnum, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator'
 import { BackupState } from '../enums/backup-state.enum'
 import { Sandbox } from '../entities/sandbox.entity'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -41,6 +41,14 @@ export class SandboxVolume {
   @IsOptional()
   @IsString()
   subpath?: string
+
+  @ApiPropertyOptional({
+    description: 'Explicit storage backend selected by the control plane',
+    enum: ['legacy-cos', 'local-first'],
+  })
+  @IsOptional()
+  @IsIn(['legacy-cos', 'local-first'])
+  backend?: 'legacy-cos' | 'local-first'
 }
 
 @ApiSchema({ name: 'Sandbox' })

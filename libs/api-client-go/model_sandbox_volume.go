@@ -27,6 +27,8 @@ type SandboxVolume struct {
 	MountPath string `json:"mountPath"`
 	// Optional subpath within the volume to mount. When specified, only this S3 prefix will be accessible. When omitted, the entire volume is mounted.
 	Subpath *string `json:"subpath,omitempty"`
+	// Explicit storage backend selected by the control plane
+	Backend *string `json:"backend,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -131,6 +133,38 @@ func (o *SandboxVolume) SetSubpath(v string) {
 	o.Subpath = &v
 }
 
+// GetBackend returns the Backend field value if set, zero value otherwise.
+func (o *SandboxVolume) GetBackend() string {
+	if o == nil || IsNil(o.Backend) {
+		var ret string
+		return ret
+	}
+	return *o.Backend
+}
+
+// GetBackendOk returns a tuple with the Backend field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *SandboxVolume) GetBackendOk() (*string, bool) {
+	if o == nil || IsNil(o.Backend) {
+		return nil, false
+	}
+	return o.Backend, true
+}
+
+// HasBackend returns a boolean if a field has been set.
+func (o *SandboxVolume) HasBackend() bool {
+	if o != nil && !IsNil(o.Backend) {
+		return true
+	}
+
+	return false
+}
+
+// SetBackend gets a reference to the given string and assigns it to the Backend field.
+func (o *SandboxVolume) SetBackend(v string) {
+	o.Backend = &v
+}
+
 func (o SandboxVolume) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -145,6 +179,9 @@ func (o SandboxVolume) ToMap() (map[string]interface{}, error) {
 	toSerialize["mountPath"] = o.MountPath
 	if !IsNil(o.Subpath) {
 		toSerialize["subpath"] = o.Subpath
+	}
+	if !IsNil(o.Backend) {
+		toSerialize["backend"] = o.Backend
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -193,6 +230,7 @@ func (o *SandboxVolume) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "volumeId")
 		delete(additionalProperties, "mountPath")
 		delete(additionalProperties, "subpath")
+		delete(additionalProperties, "backend")
 		o.AdditionalProperties = additionalProperties
 	}
 

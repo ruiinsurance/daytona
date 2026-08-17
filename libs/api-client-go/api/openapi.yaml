@@ -7664,6 +7664,383 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /storage-nodes/register:
+    post:
+      operationId: registerStorageNode
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterStorageNode"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Register the authenticated Runner storage node
+      tags:
+      - storage-nodes
+  /storage-nodes/{nodeId}/heartbeat:
+    post:
+      operationId: heartbeatStorageNode
+      parameters:
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeartbeatStorageNode"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Record storage capacity and heartbeat for the authenticated Runner
+      tags:
+      - storage-nodes
+  /runners/{runnerId}/storage-nodes/{nodeId}:
+    get:
+      operationId: getStorageNodeStatus
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Runner resource that owns the node
+        explode: false
+        in: path
+        name: runnerId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get storage node status
+      tags:
+      - storage-nodes
+  /runners/{runnerId}/storage-nodes/{nodeId}/activate:
+    post:
+      operationId: activateStorageNode
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Runner resource that owns the node
+        explode: false
+        in: path
+        name: runnerId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Activate a storage node
+      tags:
+      - storage-nodes
+  /runners/{runnerId}/storage-nodes/{nodeId}/cordon:
+    post:
+      operationId: cordonStorageNode
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Runner resource that owns the node
+        explode: false
+        in: path
+        name: runnerId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Cordon a storage node
+      tags:
+      - storage-nodes
+  /runners/{runnerId}/storage-nodes/{nodeId}/drain:
+    post:
+      operationId: drainStorageNode
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Runner resource that owns the node
+        explode: false
+        in: path
+        name: runnerId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Start draining a storage node
+      tags:
+      - storage-nodes
+  /runners/{runnerId}/storage-nodes/{nodeId}/remove:
+    post:
+      operationId: removeStorageNode
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Runner resource that owns the node
+        explode: false
+        in: path
+        name: runnerId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNode"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Tombstone a drained storage node
+      tags:
+      - storage-nodes
+  /storage-workspaces/{sandboxId}/move:
+    post:
+      operationId: requestWorkspaceMove
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: sandboxId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestWorkspaceMoveDto"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceOperationDto"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Request an idempotent workspace move
+      tags:
+      - storage-workspaces
+  /storage-workspaces/{sandboxId}/operations/{operationId}:
+    get:
+      operationId: getWorkspaceMove
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-Daytona-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: sandboxId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: operationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceOperationDto"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get workspace move status
+      tags:
+      - storage-workspaces
   /docker-registry:
     get:
       operationId: listRegistries
@@ -11049,6 +11426,7 @@ components:
         mountPath: /data
         volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
         subpath: users/alice
+        backend: legacy-cos
       properties:
         volumeId:
           description: The ID or name of the volume. Resolved to the volume ID on
@@ -11065,6 +11443,15 @@ components:
             \ is mounted."
           example: users/alice
           type: string
+        backend:
+          description: Explicit storage backend selected by the control plane
+          enum:
+          - legacy-cos
+          - local-first
+          type: string
+          x-enum-varnames:
+          - LEGACY_COS
+          - LOCAL_FIRST
       required:
       - mountPath
       - volumeId
@@ -11132,9 +11519,11 @@ components:
         - mountPath: /data
           volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
           subpath: users/alice
+          backend: legacy-cos
         - mountPath: /data
           volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
           subpath: users/alice
+          backend: legacy-cos
         cpu: 2
         recoverable: true
         env:
@@ -11372,9 +11761,11 @@ components:
           - mountPath: /data
             volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
             subpath: users/alice
+            backend: legacy-cos
           - mountPath: /data
             volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
             subpath: users/alice
+            backend: legacy-cos
           cpu: 2
           recoverable: true
           env:
@@ -11416,9 +11807,11 @@ components:
           - mountPath: /data
             volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
             subpath: users/alice
+            backend: legacy-cos
           - mountPath: /data
             volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
             subpath: users/alice
+            backend: legacy-cos
           cpu: 2
           recoverable: true
           env:
@@ -11483,9 +11876,11 @@ components:
         - mountPath: /data
           volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
           subpath: users/alice
+          backend: legacy-cos
         - mountPath: /data
           volumeId: 3fa85f64-5717-4562-b3fc-2c963f66afa6
           subpath: users/alice
+          backend: legacy-cos
         cpu: 2
         env:
           NODE_ENV: production
@@ -14543,6 +14938,235 @@ components:
           type: string
       required:
       - status
+      type: object
+    RegisterStorageNode:
+      example:
+        capacityInodes: 10000000
+        capacityBytes: 1099511627776
+        nodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        labels: "{}"
+      properties:
+        nodeId:
+          description: Stable storage node identifier
+          format: uuid
+          type: string
+        capacityBytes:
+          description: Total bytes available to the node
+          example: 1099511627776
+          type: number
+        capacityInodes:
+          description: Total inodes available to the node
+          example: 10000000
+          type: number
+        labels:
+          description: Non-sensitive scheduling labels
+          type: object
+      required:
+      - capacityBytes
+      - capacityInodes
+      - nodeId
+      type: object
+    StorageNode:
+      example:
+        createdAt: 2000-01-23T04:56:07.000+00:00
+        capacityInodes: "10000000"
+        capacityBytes: "1099511627776"
+        runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        state: joining
+        usedBytes: "2147483648"
+        removedAt: 2000-01-23T04:56:07.000+00:00
+        nodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        usedInodes: "150000"
+        heartbeatAt: 2000-01-23T04:56:07.000+00:00
+        labels: "{}"
+        updatedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        nodeId:
+          format: uuid
+          type: string
+        runnerId:
+          format: uuid
+          type: string
+        state:
+          enum:
+          - joining
+          - active
+          - cordoned
+          - draining
+          - drained
+          - offline
+          - removed
+          type: string
+        capacityBytes:
+          description: Bigint values are returned as decimal strings
+          example: "1099511627776"
+          type: string
+        usedBytes:
+          description: Bigint values are returned as decimal strings
+          example: "2147483648"
+          type: string
+        capacityInodes:
+          description: Bigint values are returned as decimal strings
+          example: "10000000"
+          type: string
+        usedInodes:
+          description: Bigint values are returned as decimal strings
+          example: "150000"
+          type: string
+        labels:
+          type: object
+        heartbeatAt:
+          format: date-time
+          nullable: true
+          type: string
+        removedAt:
+          format: date-time
+          nullable: true
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - capacityBytes
+      - capacityInodes
+      - createdAt
+      - labels
+      - nodeId
+      - runnerId
+      - state
+      - updatedAt
+      - usedBytes
+      - usedInodes
+      type: object
+    HeartbeatStorageNode:
+      example:
+        capacityInodes: 10000000
+        capacityBytes: 1099511627776
+        usedBytes: 2147483648
+        usedInodes: 150000
+        labels: "{}"
+      properties:
+        capacityBytes:
+          description: Total bytes available to the node
+          example: 1099511627776
+          type: number
+        usedBytes:
+          description: Bytes currently used by the node
+          example: 2147483648
+          type: number
+        capacityInodes:
+          description: Total inodes available to the node
+          example: 10000000
+          type: number
+        usedInodes:
+          description: Inodes currently used by the node
+          example: 150000
+          type: number
+        labels:
+          description: Non-sensitive scheduling labels
+          type: object
+      required:
+      - capacityBytes
+      - capacityInodes
+      - usedBytes
+      - usedInodes
+      type: object
+    RequestWorkspaceMoveDto:
+      example:
+        placementId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        idempotencyKey: idempotencyKey
+        sourceNodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        volumeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        operationId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        expectedFenceEpoch: "1"
+        targetNodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+      properties:
+        operationId:
+          format: uuid
+          type: string
+        placementId:
+          format: uuid
+          type: string
+        volumeId:
+          format: uuid
+          type: string
+        sourceNodeId:
+          format: uuid
+          type: string
+        targetNodeId:
+          format: uuid
+          type: string
+        expectedFenceEpoch:
+          example: "1"
+          type: string
+        idempotencyKey:
+          description: Client retry key; it never authorizes a second move.
+          type: string
+      required:
+      - expectedFenceEpoch
+      - idempotencyKey
+      - operationId
+      - placementId
+      - sourceNodeId
+      - targetNodeId
+      - volumeId
+      type: object
+    WorkspaceOperationDto:
+      example:
+        phase: requested
+        placementId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        sourceNodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        sandboxId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        errorCode: errorCode
+        id: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        targetNodeId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        sourceRetained: true
+      properties:
+        id:
+          format: uuid
+          type: string
+        phase:
+          enum:
+          - requested
+          - leased
+          - quiescing
+          - local_checkpointed
+          - copying
+          - target_verified
+          - owner_switched
+          - target_started
+          - source_retained
+          - complete
+          type: string
+        placementId:
+          format: uuid
+          type: string
+        sandboxId:
+          format: uuid
+          type: string
+        sourceNodeId:
+          format: uuid
+          type: string
+        targetNodeId:
+          format: uuid
+          type: string
+        errorCode:
+          nullable: true
+          type: string
+        sourceRetained:
+          type: boolean
+      required:
+      - errorCode
+      - id
+      - phase
+      - placementId
+      - sandboxId
+      - sourceNodeId
+      - sourceRetained
+      - targetNodeId
       type: object
     CreateDockerRegistry:
       example:

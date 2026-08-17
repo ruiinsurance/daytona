@@ -14,6 +14,8 @@ api_regions.go
 api_runners.go
 api_sandbox.go
 api_snapshots.go
+api_storage_nodes.go
+api_storage_workspaces.go
 api_toolbox.go
 api_users.go
 api_volumes.go
@@ -80,6 +82,7 @@ model_gpu_type.go
 model_health_controller_check_200_response.go
 model_health_controller_check_200_response_info_value.go
 model_health_controller_check_503_response.go
+model_heartbeat_storage_node.go
 model_job.go
 model_job_status.go
 model_job_type.go
@@ -145,9 +148,11 @@ model_region_quota.go
 model_region_screenshot_response.go
 model_region_type.go
 model_region_usage_overview.go
+model_register_storage_node.go
 model_registry_push_access_dto.go
 model_replace_request.go
 model_replace_result.go
+model_request_workspace_move_dto.go
 model_resize_sandbox.go
 model_runner.go
 model_runner_class.go
@@ -180,6 +185,7 @@ model_snapshot_state.go
 model_ssh_access_dto.go
 model_ssh_access_validation_dto.go
 model_storage_access_dto.go
+model_storage_node.go
 model_toolbox_proxy_url.go
 model_trace_span.go
 model_trace_summary.go
@@ -205,5 +211,6 @@ model_webhook_event.go
 model_webhook_initialization_status.go
 model_windows_response.go
 model_work_dir_response.go
+model_workspace_operation_dto.go
 response.go
 utils.go
