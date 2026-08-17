@@ -5,12 +5,8 @@
 
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import {
-  GetObjectCommand,
-  HeadObjectCommand,
-  PutObjectCommand,
-  S3Client,
-} from '@aws-sdk/client-s3'
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { createHash, randomUUID } from 'node:crypto'
 import { Repository } from 'typeorm'
 import { WorkspaceGeneration } from '../entities/workspace-generation.entity'
 import { WorkspaceGenerationState } from '../enums/workspace-generation-state.enum'
@@ -30,6 +26,7 @@ import {
   ImmutableCheckpointSource,
   manifestHash,
   assertUuid,
+  assertDecimal,
   checkpointContentHash,
 } from '../local-first/workspace-generation.contract'
 import { LOCAL_FIRST_GENERATION_PREFIX } from '../local-first/workspace-generation.tokens'
@@ -38,13 +35,16 @@ const FIXED_UPLOAD_ERROR = 'generation_upload_failed'
 
 @Injectable()
 export class WorkspaceGenerationService {
+  private readonly workerId = randomUUID()
+
   constructor(
     @InjectRepository(WorkspaceGeneration)
     private readonly generationRepository: Repository<WorkspaceGeneration>,
     @InjectRepository(WorkspacePlacement)
     private readonly placementRepository: Repository<WorkspacePlacement>,
     private readonly workspacePlacementService: WorkspacePlacementService,
-    @Optional() @Inject(LOCAL_FIRST_GENERATION_PREFIX)
+    @Optional()
+    @Inject(LOCAL_FIRST_GENERATION_PREFIX)
     private readonly generationPrefix = 'local-first',
   ) {}
 
@@ -52,7 +52,19 @@ export class WorkspaceGenerationService {
     const placement = await this.placementRepository.findOne({ where: { id: input.placementId } })
     if (!placement) throw new NotFoundException('Workspace placement not found')
     placement.dirty = true
-    if (input.localGeneration !== undefined) placement.localGeneration = input.localGeneration
+    if (input.localGeneration !== undefined) {
+      assertDecimal(input.localGeneration, 'local_generation_invalid')
+      assertDecimal(placement.localGeneration, 'local_generation_invalid')
+      assertDecimal(placement.cosGeneration, 'cos_generation_invalid')
+      const incomingGeneration = BigInt(input.localGeneration)
+      if (
+        incomingGeneration < BigInt(placement.localGeneration) ||
+        incomingGeneration < BigInt(placement.cosGeneration)
+      ) {
+        throw new ConflictException('local_generation_regression')
+      }
+      placement.localGeneration = input.localGeneration
+    }
     if (placement.replicationStatus === 'durable') placement.replicationStatus = 'pending'
     return this.placementRepository.save(placement)
   }
@@ -73,11 +85,7 @@ export class WorkspaceGenerationService {
     if (!placement.ownerNodeId) throw new Error('recovery_required')
     assertUuid(placement.ownerNodeId, 'owner_node_id_invalid')
 
-    const workspaceKey = buildWorkspaceGenerationKey(
-      placement.volumeId,
-      placement.sandboxId,
-      this.generationPrefix,
-    )
+    const workspaceKey = buildWorkspaceGenerationKey(placement.volumeId, placement.sandboxId, this.generationPrefix)
     const alreadyCommitted = await this.generationRepository.findOne({
       where: { placementId: placement.id, generation: placement.localGeneration },
     })
@@ -97,8 +105,9 @@ export class WorkspaceGenerationService {
       const checkpoint = await input.source.create({
         volumeId: placement.volumeId,
         sandboxId: placement.sandboxId,
-        sourcePath: input.sourcePath
-          ?? `/srv/kortix-storage/nodes/${placement.ownerNodeId}/volumes/${placement.volumeId}/sandboxes/${placement.sandboxId}/workspace`,
+        sourcePath:
+          input.sourcePath ??
+          `/srv/kortix-storage/nodes/${placement.ownerNodeId}/volumes/${placement.volumeId}/sandboxes/${placement.sandboxId}/workspace`,
         nextGeneration,
         ownerNodeId: placement.ownerNodeId,
         operationId: checkpointLease.operationId,
@@ -107,20 +116,7 @@ export class WorkspaceGenerationService {
         leaseExpiresAt: checkpointLease.leaseExpiresAt,
       })
       if (checkpoint.generation !== nextGeneration) throw new ConflictException('checkpoint_generation_conflict')
-      assertManifestMatches(checkpoint.manifest, {
-        ...checkpoint.manifest,
-        generation: nextGeneration,
-      })
-      if (
-        checkpoint.manifest.volumeId !== placement.volumeId
-        || checkpoint.manifest.sandboxId !== placement.sandboxId
-        || checkpoint.manifest.generation !== nextGeneration
-        || checkpoint.manifest.objectCount !== checkpoint.objects.length
-        || checkpoint.manifest.contentHash !== checkpointContentHash(checkpoint.objects)
-        || checkpoint.objects.some((object) => object.size < 0 || !Number.isSafeInteger(object.size))
-      ) {
-        throw new ConflictException('checkpoint_manifest_invalid')
-      }
+      assertCheckpointIntegrity(checkpoint, placement.volumeId, placement.sandboxId, nextGeneration)
 
       const existing = await this.generationRepository.findOne({
         where: { placementId: placement.id, generation: nextGeneration },
@@ -135,20 +131,22 @@ export class WorkspaceGenerationService {
         })
       }
 
-      const generation = existing ?? this.generationRepository.create({
-        placementId: placement.id,
-        volumeId: placement.volumeId,
-        sandboxId: placement.sandboxId,
-        generation: nextGeneration,
-        state: WorkspaceGenerationState.CHECKPOINTED,
-        sourcePath: checkpoint.sourcePath,
-        manifestHash: manifestHash(checkpoint.manifest),
-        objectCount: String(checkpoint.manifest.objectCount),
-        bytes: String(checkpoint.manifest.bytes),
-        manifest: Object.fromEntries(Object.entries(checkpoint.manifest)),
-        errorCode: null,
-        committedAt: null,
-      })
+      const generation =
+        existing ??
+        this.generationRepository.create({
+          placementId: placement.id,
+          volumeId: placement.volumeId,
+          sandboxId: placement.sandboxId,
+          generation: nextGeneration,
+          state: WorkspaceGenerationState.CHECKPOINTED,
+          sourcePath: checkpoint.sourcePath,
+          manifestHash: manifestHash(checkpoint.manifest),
+          objectCount: String(checkpoint.manifest.objectCount),
+          bytes: String(checkpoint.manifest.bytes),
+          manifest: Object.fromEntries(Object.entries(checkpoint.manifest)),
+          errorCode: null,
+          committedAt: null,
+        })
       generation.state = WorkspaceGenerationState.CHECKPOINTED
       generation.errorCode = null
       await this.generationRepository.save(generation)
@@ -166,11 +164,7 @@ export class WorkspaceGenerationService {
         await input.store.putCommittedMarker(workspaceKey, checkpoint.manifest)
 
         const expectedLatest = await input.store.getLatest(workspaceKey)
-        const latestPublished = await input.store.compareAndSetLatest(
-          workspaceKey,
-          expectedLatest,
-          nextGeneration,
-        )
+        const latestPublished = await input.store.compareAndSetLatest(workspaceKey, expectedLatest, nextGeneration)
 
         generation.state = WorkspaceGenerationState.COMMITTED
         generation.committedAt = input.now ?? new Date()
@@ -205,9 +199,7 @@ export class WorkspaceGenerationService {
   ): Promise<{ operationId: string; fenceEpoch: string; leaseOwner: string; leaseExpiresAt: string }> {
     if (!placement.ownerNodeId) throw new Error('recovery_required')
     if (placement.leaseOwner) {
-      const leaseExpiresAt = placement.leaseExpiresAt
-        ? new Date(placement.leaseExpiresAt)
-        : null
+      const leaseExpiresAt = placement.leaseExpiresAt ? new Date(placement.leaseExpiresAt) : null
       if (!leaseExpiresAt || !Number.isFinite(leaseExpiresAt.getTime())) {
         throw new ConflictException('workspace_lease_invalid')
       }
@@ -219,7 +211,7 @@ export class WorkspaceGenerationService {
     if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch < 1) {
       throw new ConflictException('workspace_fence_invalid')
     }
-    const leaseOwner = `generation-worker:${placement.id}`
+    const leaseOwner = `generation-worker:${this.workerId}:${placement.id}`
     const leased = await this.workspacePlacementService.acquireWriterLease({
       placementId: placement.id,
       nodeId: placement.ownerNodeId,
@@ -285,15 +277,15 @@ export class WorkspaceGenerationService {
       latestPublished = true
     }
     if (!latestPublished) {
-      latestPublished = await input.store.compareAndSetLatest(
-        input.workspaceKey,
-        latest,
-        input.generation,
-      )
+      latestPublished = await input.store.compareAndSetLatest(input.workspaceKey, latest, input.generation)
     }
 
     input.placement.localGeneration = input.generation
-    if (latestPublished && input.placement.cosGeneration !== latest && input.placement.cosGeneration !== input.generation) {
+    if (
+      latestPublished &&
+      input.placement.cosGeneration !== latest &&
+      input.placement.cosGeneration !== input.generation
+    ) {
       input.placement.cosGeneration = input.generation
     }
     input.placement.dirty = !latestPublished
@@ -304,6 +296,56 @@ export class WorkspaceGenerationService {
       generation: input.generationRow,
     }
   }
+}
+
+function assertCheckpointIntegrity(
+  checkpoint: ImmutableCheckpoint,
+  volumeId: string,
+  sandboxId: string,
+  generation: string,
+): void {
+  const manifest = checkpoint.manifest
+  if (
+    manifest.formatVersion !== 1 ||
+    manifest.volumeId !== volumeId ||
+    manifest.sandboxId !== sandboxId ||
+    manifest.generation !== generation ||
+    !Number.isSafeInteger(manifest.objectCount) ||
+    manifest.objectCount < 0 ||
+    !Number.isSafeInteger(manifest.bytes) ||
+    manifest.bytes < 0 ||
+    !/^[a-f0-9]{64}$/.test(manifest.contentHash) ||
+    typeof manifest.createdAt !== 'string' ||
+    manifest.objectCount !== checkpoint.objects.length
+  ) {
+    throw new ConflictException('checkpoint_manifest_invalid')
+  }
+
+  let bytes = 0
+  for (const object of checkpoint.objects) {
+    const body = typeof object.body === 'string' ? Buffer.from(object.body) : Buffer.from(object.body)
+    if (
+      !isSafeObjectKey(object.key) ||
+      !Number.isSafeInteger(object.size) ||
+      object.size < 0 ||
+      body.byteLength !== object.size ||
+      !/^[a-f0-9]{64}$/.test(object.sha256) ||
+      createHash('sha256').update(body).digest('hex') !== object.sha256 ||
+      (object.mode !== undefined && (!Number.isSafeInteger(object.mode) || object.mode < 0 || object.mode > 0o777))
+    ) {
+      throw new ConflictException('checkpoint_manifest_invalid')
+    }
+    bytes += object.size
+    if (!Number.isSafeInteger(bytes)) throw new ConflictException('checkpoint_manifest_invalid')
+  }
+  if (bytes !== manifest.bytes || checkpointContentHash(checkpoint.objects) !== manifest.contentHash) {
+    throw new ConflictException('checkpoint_manifest_invalid')
+  }
+}
+
+function isSafeObjectKey(value: string): boolean {
+  if (!value || value.startsWith('/') || value.includes('\\') || value.includes('\u0000')) return false
+  return value.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
 }
 
 export class S3GenerationObjectStore implements GenerationObjectStore {
@@ -321,32 +363,38 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
   async putObjects(workspaceKey: string, checkpoint: ImmutableCheckpoint): Promise<void> {
     this.assertWorkspaceKey(workspaceKey)
     for (const object of checkpoint.objects) {
-      await this.client.send(new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: buildGenerationObjectKey(workspaceKey, checkpoint.generation, object.key),
-        Body: object.body,
-        ContentLength: object.size,
-        Metadata: { sha256: object.sha256 },
-      }))
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: buildGenerationObjectKey(workspaceKey, checkpoint.generation, object.key),
+          Body: object.body,
+          ContentLength: object.size,
+          Metadata: { sha256: object.sha256 },
+        }),
+      )
     }
   }
 
   async putManifest(workspaceKey: string, manifest: GenerationManifest): Promise<void> {
     const key = this.generationKey(workspaceKey, manifest.generation, GENERATION_MANIFEST_NAME)
-    await this.client.send(new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      Body: JSON.stringify(manifest),
-      ContentType: 'application/json',
-    }))
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: JSON.stringify(manifest),
+        ContentType: 'application/json',
+      }),
+    )
   }
 
   async readManifest(workspaceKey: string, generation: string): Promise<GenerationManifest> {
     const key = this.generationKey(workspaceKey, generation, GENERATION_MANIFEST_NAME)
-    const response = await this.client.send(new GetObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-    }))
+    const response = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      }),
+    )
     const text = await response.Body?.transformToString()
     if (!text) throw new Error('generation_manifest_missing')
     return JSON.parse(text) as GenerationManifest
@@ -354,29 +402,35 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
 
   async putCommittedMarker(workspaceKey: string, manifest: GenerationManifest): Promise<void> {
     const key = this.generationKey(workspaceKey, manifest.generation, GENERATION_COMMIT_MARKER)
-    await this.client.send(new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      Body: JSON.stringify({ generation: manifest.generation, manifestHash: manifestHash(manifest) }),
-      ContentType: 'application/json',
-    }))
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: JSON.stringify({ generation: manifest.generation, manifestHash: manifestHash(manifest) }),
+        ContentType: 'application/json',
+      }),
+    )
   }
 
   async getLatest(workspaceKey: string): Promise<string | null> {
     this.assertWorkspaceKey(workspaceKey)
     try {
-      const response = await this.client.send(new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: `${workspaceKey}/${GENERATION_LATEST_NAME}`,
-      }))
+      const response = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: `${workspaceKey}/${GENERATION_LATEST_NAME}`,
+        }),
+      )
       const text = await response.Body?.transformToString()
       if (!text) return null
       const value = JSON.parse(text) as { generation?: unknown }
       if (typeof value.generation !== 'string') return null
-      await this.client.send(new HeadObjectCommand({
-        Bucket: this.bucket,
-        Key: this.generationKey(workspaceKey, value.generation, GENERATION_COMMIT_MARKER),
-      }))
+      await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: this.generationKey(workspaceKey, value.generation, GENERATION_COMMIT_MARKER),
+        }),
+      )
       return value.generation
     } catch (error) {
       if (isNotFound(error)) return null
@@ -395,20 +449,24 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
     // its current ETag in the same read sequence; If-Match then closes the
     // concurrent-writer race between this read and the publish.
     try {
-      await this.client.send(new HeadObjectCommand({
-        Bucket: this.bucket,
-        Key: this.generationKey(workspaceKey, generation, GENERATION_COMMIT_MARKER),
-      }))
+      await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: this.generationKey(workspaceKey, generation, GENERATION_COMMIT_MARKER),
+        }),
+      )
     } catch (error) {
       if (isNotFound(error)) return false
       throw error
     }
 
     try {
-      const latest = await this.client.send(new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: latestKey,
-      }))
+      const latest = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: latestKey,
+        }),
+      )
       const latestText = await latest.Body?.transformToString()
       if (!latestText) return false
       let latestValue: { generation?: unknown }
@@ -418,10 +476,12 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
         return false
       }
       if (latestValue.generation !== expected) return false
-      const response = await this.client.send(new HeadObjectCommand({
-        Bucket: this.bucket,
-        Key: latestKey,
-      }))
+      const response = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: latestKey,
+        }),
+      )
       etag = response.ETag
     } catch (error) {
       if (!isNotFound(error)) throw error
@@ -456,14 +516,21 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
 }
 
 function isNotFound(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && ('$metadata' in error || 'name' in error)
-    && (((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404)
-      || (error as { name?: string }).name === 'NoSuchKey'
-      || (error as { name?: string }).name === 'NotFound'))
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      ('$metadata' in error || 'name' in error) &&
+      ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404 ||
+        (error as { name?: string }).name === 'NoSuchKey' ||
+        (error as { name?: string }).name === 'NotFound'),
+  )
 }
 
 function isPreconditionFailure(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object'
-    && ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412
-      || (error as { name?: string }).name === 'PreconditionFailed'))
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412 ||
+        (error as { name?: string }).name === 'PreconditionFailed'),
+  )
 }

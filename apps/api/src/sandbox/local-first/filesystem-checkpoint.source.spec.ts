@@ -51,12 +51,45 @@ describe('FilesystemImmutableCheckpointSource', () => {
       await symlink(outside, source)
       const checkpointSource = new FilesystemImmutableCheckpointSource(join(root, 'storage'))
 
-      await expect(checkpointSource.create({
+      await expect(
+        checkpointSource.create({
+          volumeId: VOLUME_ID,
+          sandboxId: SANDBOX_ID,
+          sourcePath: source,
+          nextGeneration: '1',
+        }),
+      ).rejects.toThrow('checkpoint_symlink_rejected')
+    } finally {
+      await makeTreeWritable(root)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a same-sized mutation of a retained checkpoint on retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daytona-checkpoint-integrity-'))
+    try {
+      const source = join(root, 'workspace')
+      await mkdir(source, { recursive: true })
+      await writeFile(join(source, 'state.db'), 'before')
+      const checkpointSource = new FilesystemImmutableCheckpointSource(join(root, 'storage'))
+      const first = await checkpointSource.create({
         volumeId: VOLUME_ID,
         sandboxId: SANDBOX_ID,
         sourcePath: source,
         nextGeneration: '1',
-      })).rejects.toThrow('checkpoint_symlink_rejected')
+      })
+
+      await makeTreeWritable(first.sourcePath)
+      await writeFile(join(first.sourcePath, 'state.db'), 'after')
+
+      await expect(
+        checkpointSource.create({
+          volumeId: VOLUME_ID,
+          sandboxId: SANDBOX_ID,
+          sourcePath: source,
+          nextGeneration: '1',
+        }),
+      ).rejects.toThrow('checkpoint_manifest_mismatch')
     } finally {
       await makeTreeWritable(root)
       await rm(root, { recursive: true, force: true })

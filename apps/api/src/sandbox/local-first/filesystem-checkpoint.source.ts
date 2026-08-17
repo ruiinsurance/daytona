@@ -6,7 +6,15 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
-import { checkpointContentHash, ImmutableCheckpoint, ImmutableCheckpointSource, CheckpointObject, GenerationManifest, assertDecimal, assertUuid } from './workspace-generation.contract'
+import {
+  checkpointContentHash,
+  ImmutableCheckpoint,
+  ImmutableCheckpointSource,
+  CheckpointObject,
+  GenerationManifest,
+  assertDecimal,
+  assertUuid,
+} from './workspace-generation.contract'
 
 export class FilesystemImmutableCheckpointSource implements ImmutableCheckpointSource {
   constructor(private readonly checkpointRoot: string) {
@@ -39,12 +47,22 @@ export class FilesystemImmutableCheckpointSource implements ImmutableCheckpointS
     const manifestPath = join(finalPath, '.checkpoint-manifest.json')
     try {
       const persistedManifest = JSON.parse(await readFile(manifestPath, 'utf8')) as GenerationManifest
+      if (
+        persistedManifest.volumeId !== input.volumeId ||
+        persistedManifest.sandboxId !== input.sandboxId ||
+        persistedManifest.generation !== input.nextGeneration
+      ) {
+        throw new Error('checkpoint_manifest_mismatch')
+      }
       return this.loadCheckpoint(finalPath, persistedManifest)
     } catch (error) {
       if (!isMissing(error)) throw error
     }
 
-    await mkdir(join(this.checkpointRoot, 'checkpoints', input.volumeId, input.sandboxId), { recursive: true, mode: 0o750 })
+    await mkdir(join(this.checkpointRoot, 'checkpoints', input.volumeId, input.sandboxId), {
+      recursive: true,
+      mode: 0o750,
+    })
     const stagingPath = `${finalPath}.staging-${randomUUID()}`
     await cp(sourcePath, stagingPath, { recursive: true, force: false, verbatimSymlinks: true })
     try {
@@ -67,7 +85,12 @@ export class FilesystemImmutableCheckpointSource implements ImmutableCheckpointS
       await writeFile(join(stagingPath, '.checkpoint-manifest.json'), JSON.stringify(manifest), { mode: 0o640 })
       await rename(stagingPath, finalPath)
       await makeReadOnly(finalPath)
-      return { sourcePath: finalPath, generation: input.nextGeneration, manifest, objects: await collectObjects(finalPath) }
+      return {
+        sourcePath: finalPath,
+        generation: input.nextGeneration,
+        manifest,
+        objects: await collectObjects(finalPath),
+      }
     } catch (error) {
       await removeStaging(stagingPath)
       throw error
@@ -76,7 +99,18 @@ export class FilesystemImmutableCheckpointSource implements ImmutableCheckpointS
 
   private async loadCheckpoint(path: string, manifest: GenerationManifest): Promise<ImmutableCheckpoint> {
     const objects = await collectObjects(path)
-    if (objects.length !== manifest.objectCount || objects.reduce((sum, object) => sum + object.size, 0) !== manifest.bytes) {
+    const bytes = objects.reduce((sum, object) => sum + object.size, 0)
+    if (
+      manifest.formatVersion !== 1 ||
+      !Number.isSafeInteger(manifest.objectCount) ||
+      manifest.objectCount < 0 ||
+      !Number.isSafeInteger(manifest.bytes) ||
+      manifest.bytes < 0 ||
+      !/^[a-f0-9]{64}$/.test(manifest.contentHash) ||
+      objects.length !== manifest.objectCount ||
+      bytes !== manifest.bytes ||
+      checkpointContentHash(objects) !== manifest.contentHash
+    ) {
       throw new Error('checkpoint_manifest_mismatch')
     }
     return { sourcePath: path, generation: manifest.generation, manifest, objects }
@@ -122,6 +156,7 @@ async function walk(root: string, current: string, objects: CheckpointObject[]):
       body,
       size: body.byteLength,
       sha256: createHash('sha256').update(body).digest('hex'),
+      mode: (await lstat(fullPath)).mode & 0o777,
     })
   }
 }
@@ -148,5 +183,7 @@ async function removeStaging(path: string): Promise<void> {
 }
 
 function isMissing(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'ENOENT')
+  return Boolean(
+    error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'ENOENT',
+  )
 }
