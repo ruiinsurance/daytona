@@ -4,11 +4,7 @@ import { createHash } from 'node:crypto'
 vi.mock('../entities/runner.entity', () => ({ Runner: class Runner {} }))
 vi.mock('../entities/storage-node.entity', () => ({ StorageNode: class StorageNode {} }))
 
-import {
-  checkpointContentHash,
-  manifestHash,
-  type ImmutableCheckpoint,
-} from './workspace-generation.contract'
+import { checkpointContentHash, manifestHash, type ImmutableCheckpoint } from './workspace-generation.contract'
 import {
   RunnerStorageAgentCheckpointSource,
   RunnerStorageAgentClient,
@@ -61,12 +57,14 @@ describe('RunnerStorageAgentClient', () => {
       json: async () => ({
         generation: checkpoint.generation,
         manifest: checkpoint.manifest,
-        objects: [{
-          key: 'state.db',
-          body: Buffer.from('state').toString('base64'),
-          size: 5,
-          sha256: checkpoint.objects[0].sha256,
-        }],
+        objects: [
+          {
+            key: 'state.db',
+            body: Buffer.from('state').toString('base64'),
+            size: 5,
+            sha256: checkpoint.objects[0].sha256,
+          },
+        ],
       }),
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -88,7 +86,7 @@ describe('RunnerStorageAgentClient', () => {
     expect(Buffer.from(result.objects[0].body).toString()).toBe('state')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, request] = fetchMock.mock.calls[0]
-	 expect(url.toString()).toBe('http://runner.test:8080/storage/workspaces/checkpoint')
+    expect(url.toString()).toBe('http://runner.test:8080/storage/workspaces/checkpoint')
     expect(request.headers.Authorization).toMatch(/^Bearer /)
     const requestBody = JSON.parse(request.body as string)
     expect(requestBody).toMatchObject({ nodeId: NODE_ID, volumeId: VOLUME_ID, generation: '7' })
@@ -97,62 +95,76 @@ describe('RunnerStorageAgentClient', () => {
 
   it('rejects a payload whose object hash does not match before it reaches COS', async () => {
     const checkpoint = fixtureCheckpoint()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        generation: checkpoint.generation,
-        manifest: checkpoint.manifest,
-        objects: [{
-          key: 'state.db',
-          body: Buffer.from('tampered').toString('base64'),
-          size: 8,
-          sha256: checkpoint.objects[0].sha256,
-        }],
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          generation: checkpoint.generation,
+          manifest: checkpoint.manifest,
+          objects: [
+            {
+              key: 'state.db',
+              body: Buffer.from('tampered').toString('base64'),
+              size: 8,
+              sha256: checkpoint.objects[0].sha256,
+            },
+          ],
+        }),
       }),
-    }))
+    )
 
-    await expect(client().checkpoint({
-      nodeId: NODE_ID,
-      volumeId: VOLUME_ID,
-      sandboxId: SANDBOX_ID,
-      generation: '7',
-      lease: {
-        operationId: OPERATION_ID,
-        fenceEpoch: '4',
-        leaseOwner: `move-worker:${OPERATION_ID}`,
-        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-      },
-    })).rejects.toThrow('storage_agent_payload_invalid')
+    await expect(
+      client().checkpoint({
+        nodeId: NODE_ID,
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        generation: '7',
+        lease: {
+          operationId: OPERATION_ID,
+          fenceEpoch: '4',
+          leaseOwner: `move-worker:${OPERATION_ID}`,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    ).rejects.toThrow('storage_agent_payload_invalid')
   })
 
   it('rejects a checkpoint response for a different logical workspace', async () => {
     const checkpoint = fixtureCheckpoint()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        generation: checkpoint.generation,
-        manifest: { ...checkpoint.manifest, sandboxId: OPERATION_ID },
-        objects: [{
-          key: 'state.db',
-          body: Buffer.from('state').toString('base64'),
-          size: 5,
-          sha256: checkpoint.objects[0].sha256,
-        }],
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          generation: checkpoint.generation,
+          manifest: { ...checkpoint.manifest, sandboxId: OPERATION_ID },
+          objects: [
+            {
+              key: 'state.db',
+              body: Buffer.from('state').toString('base64'),
+              size: 5,
+              sha256: checkpoint.objects[0].sha256,
+            },
+          ],
+        }),
       }),
-    }))
+    )
 
-    await expect(client().checkpoint({
-      nodeId: NODE_ID,
-      volumeId: VOLUME_ID,
-      sandboxId: SANDBOX_ID,
-      generation: '7',
-      lease: {
-        operationId: OPERATION_ID,
-        fenceEpoch: '4',
-        leaseOwner: `move-worker:${OPERATION_ID}`,
-        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-      },
-    })).rejects.toThrow('storage_agent_payload_invalid')
+    await expect(
+      client().checkpoint({
+        nodeId: NODE_ID,
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        generation: '7',
+        lease: {
+          operationId: OPERATION_ID,
+          fenceEpoch: '4',
+          leaseOwner: `move-worker:${OPERATION_ID}`,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    ).rejects.toThrow('storage_agent_payload_invalid')
   })
 
   it('rejects a target verification response with a stale generation or malformed hash', async () => {
@@ -164,18 +176,20 @@ describe('RunnerStorageAgentClient', () => {
     vi.stubGlobal('fetch', fetchMock)
     const agentClient = client()
 
-    await expect(agentClient.verify({
-      nodeId: NODE_ID,
-      volumeId: VOLUME_ID,
-      sandboxId: SANDBOX_ID,
-      checkpoint,
-      lease: {
-        operationId: OPERATION_ID,
-        fenceEpoch: '4',
-        leaseOwner: `move-worker:${OPERATION_ID}`,
-        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-      },
-    })).rejects.toThrow('storage_agent_payload_invalid')
+    await expect(
+      agentClient.verify({
+        nodeId: NODE_ID,
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        checkpoint,
+        lease: {
+          operationId: OPERATION_ID,
+          fenceEpoch: '4',
+          leaseOwner: `move-worker:${OPERATION_ID}`,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    ).rejects.toThrow('storage_agent_payload_invalid')
   })
 })
 
@@ -198,27 +212,55 @@ describe('RunnerStorageAgentCheckpointSource', () => {
     })
 
     expect(result).toBe(checkpoint)
-    expect(checkpointMock).toHaveBeenCalledWith(expect.objectContaining({
-      nodeId: NODE_ID,
-      generation: '7',
-      lease: expect.objectContaining({ operationId: OPERATION_ID, fenceEpoch: '4' }),
-    }))
+    expect(checkpointMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: NODE_ID,
+        generation: '7',
+        lease: expect.objectContaining({ operationId: OPERATION_ID, fenceEpoch: '4' }),
+      }),
+    )
   })
 
   it('rejects a checkpoint request without control-plane lease evidence', async () => {
     const source = new RunnerStorageAgentCheckpointSource({ checkpoint: vi.fn() } as any)
 
-    await expect(source.create({
-      volumeId: VOLUME_ID,
-      sandboxId: SANDBOX_ID,
-      sourcePath: '/ignored-by-runner-agent',
-      nextGeneration: '7',
-      ownerNodeId: NODE_ID,
-    })).rejects.toThrow('storage_agent_lease_missing')
+    await expect(
+      source.create({
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        sourcePath: '/ignored-by-runner-agent',
+        nextGeneration: '7',
+        ownerNodeId: NODE_ID,
+      }),
+    ).rejects.toThrow('storage_agent_lease_missing')
   })
 })
 
 describe('RunnerStorageAgentMoveRuntime', () => {
+  it('does not derive a checkpoint generation from the fencing epoch', async () => {
+    const agentClient = { checkpoint: vi.fn() }
+    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any)
+    const operation = {
+      id: OPERATION_ID,
+      placementId: '55555555-5555-4555-8555-555555555555',
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      sourceNodeId: NODE_ID,
+      targetNodeId: '66666666-6666-4666-8666-666666666666',
+      expectedFenceEpoch: '99',
+    }
+
+    await expect(
+      runtime.checkpoint({
+        operation,
+        fenceEpoch: '99',
+        checkpointGeneration: null,
+        targetGeneration: null,
+      } as any),
+    ).rejects.toThrow('move_checkpoint_generation_missing')
+    expect(agentClient.checkpoint).not.toHaveBeenCalled()
+  })
+
   it('runs quiesce, checkpoint, copy, target verification, fenced start, and retention', async () => {
     const checkpoint = fixtureCheckpoint()
     const agentClient = {
@@ -241,8 +283,9 @@ describe('RunnerStorageAgentMoveRuntime', () => {
       sourceNodeId: NODE_ID,
       targetNodeId: '66666666-6666-4666-8666-666666666666',
       expectedFenceEpoch: '4',
+      leaseOwner: `move-worker:test:${OPERATION_ID}`,
     }
-    const input = { operation, fenceEpoch: '5', checkpointGeneration: null, targetGeneration: null } as any
+    const input = { operation, fenceEpoch: '5', checkpointGeneration: '7', targetGeneration: null } as any
 
     await runtime.quiesce(input)
     await expect(runtime.checkpoint(input)).resolves.toEqual({ generation: '7' })
@@ -256,10 +299,12 @@ describe('RunnerStorageAgentMoveRuntime', () => {
 
     expect(agentClient.quiesce).toHaveBeenCalled()
     expect(agentClient.import).toHaveBeenCalledWith(expect.objectContaining({ nodeId: operation.targetNodeId }))
-    expect(placementService.acquireWriterLease).toHaveBeenCalledWith(expect.objectContaining({
-      nodeId: operation.targetNodeId,
-      fenceEpoch: 5,
-    }))
+    expect(placementService.acquireWriterLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: operation.targetNodeId,
+        fenceEpoch: 5,
+      }),
+    )
     expect(agentClient.start).toHaveBeenCalled()
     expect(agentClient.retain).toHaveBeenCalled()
   })

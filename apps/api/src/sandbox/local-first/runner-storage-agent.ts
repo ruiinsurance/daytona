@@ -64,16 +64,22 @@ export class RunnerStorageAgentClient {
     generation: string
     lease: AgentLease
   }): Promise<ImmutableCheckpoint> {
-    return this.normaliseCheckpoint(await this.request<CheckpointResponse>(input.nodeId, '/storage/workspaces/checkpoint', {
-      operationId: input.lease.operationId,
-      volumeId: input.volumeId,
-      sandboxId: input.sandboxId,
-      nodeId: input.nodeId,
-      generation: input.generation,
-      fenceEpoch: input.lease.fenceEpoch,
-      leaseOwner: input.lease.leaseOwner,
-      leaseExpiresAt: input.lease.leaseExpiresAt,
-    }), input.nodeId, input.volumeId, input.sandboxId, input.generation)
+    return this.normaliseCheckpoint(
+      await this.request<CheckpointResponse>(input.nodeId, '/storage/workspaces/checkpoint', {
+        operationId: input.lease.operationId,
+        volumeId: input.volumeId,
+        sandboxId: input.sandboxId,
+        nodeId: input.nodeId,
+        generation: input.generation,
+        fenceEpoch: input.lease.fenceEpoch,
+        leaseOwner: input.lease.leaseOwner,
+        leaseExpiresAt: input.lease.leaseExpiresAt,
+      }),
+      input.nodeId,
+      input.volumeId,
+      input.sandboxId,
+      input.generation,
+    )
   }
 
   async export(input: {
@@ -83,16 +89,22 @@ export class RunnerStorageAgentClient {
     generation: string
     lease: AgentLease
   }): Promise<ImmutableCheckpoint> {
-    return this.normaliseCheckpoint(await this.request<CheckpointResponse>(input.nodeId, '/storage/workspaces/export', {
-      operationId: input.lease.operationId,
-      volumeId: input.volumeId,
-      sandboxId: input.sandboxId,
-      nodeId: input.nodeId,
-      generation: input.generation,
-      fenceEpoch: input.lease.fenceEpoch,
-      leaseOwner: input.lease.leaseOwner,
-      leaseExpiresAt: input.lease.leaseExpiresAt,
-    }), input.nodeId, input.volumeId, input.sandboxId, input.generation)
+    return this.normaliseCheckpoint(
+      await this.request<CheckpointResponse>(input.nodeId, '/storage/workspaces/export', {
+        operationId: input.lease.operationId,
+        volumeId: input.volumeId,
+        sandboxId: input.sandboxId,
+        nodeId: input.nodeId,
+        generation: input.generation,
+        fenceEpoch: input.lease.fenceEpoch,
+        leaseOwner: input.lease.leaseOwner,
+        leaseExpiresAt: input.lease.leaseExpiresAt,
+      }),
+      input.nodeId,
+      input.volumeId,
+      input.sandboxId,
+      input.generation,
+    )
   }
 
   async import(input: {
@@ -141,22 +153,17 @@ export class RunnerStorageAgentClient {
       manifest: input.checkpoint.manifest,
     })
     if (
-      !response
-      || response.generation !== input.checkpoint.generation
-      || typeof response.manifestHash !== 'string'
-      || !/^[a-f0-9]{64}$/.test(response.manifestHash)
+      !response ||
+      response.generation !== input.checkpoint.generation ||
+      typeof response.manifestHash !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(response.manifestHash)
     ) {
       throw new Error('storage_agent_payload_invalid')
     }
     return response
   }
 
-  async quiesce(input: {
-    nodeId: string
-    volumeId: string
-    sandboxId: string
-    lease: AgentLease
-  }): Promise<void> {
+  async quiesce(input: { nodeId: string; volumeId: string; sandboxId: string; lease: AgentLease }): Promise<void> {
     await this.request(input.nodeId, '/storage/workspaces/quiesce', {
       operationId: input.lease.operationId,
       volumeId: input.volumeId,
@@ -168,12 +175,7 @@ export class RunnerStorageAgentClient {
     })
   }
 
-  async start(input: {
-    nodeId: string
-    volumeId: string
-    sandboxId: string
-    lease: AgentLease
-  }): Promise<void> {
+  async start(input: { nodeId: string; volumeId: string; sandboxId: string; lease: AgentLease }): Promise<void> {
     await this.request(input.nodeId, '/storage/workspaces/start', {
       operationId: input.lease.operationId,
       volumeId: input.volumeId,
@@ -232,7 +234,7 @@ export class RunnerStorageAgentClient {
       if (!response.ok) {
         let code = `storage_agent_http_${response.status}`
         try {
-          const errorBody = await response.json() as { code?: unknown }
+          const errorBody = (await response.json()) as { code?: unknown }
           if (typeof errorBody.code === 'string' && /^[a-z0-9_]+$/.test(errorBody.code)) code = errorBody.code
         } catch {
           // Keep the fixed status category when the Runner response is not JSON.
@@ -240,12 +242,15 @@ export class RunnerStorageAgentClient {
         throw new Error(code)
       }
       try {
-        return await response.json() as T
+        return (await response.json()) as T
       } catch {
         throw new Error('storage_agent_response_invalid')
       }
     } catch (error) {
-      if (error instanceof Error && /^storage_agent_(?:http_|response_|runner_|payload_|request_)/.test(error.message)) {
+      if (
+        error instanceof Error &&
+        /^storage_agent_(?:http_|response_|runner_|payload_|request_)/.test(error.message)
+      ) {
         throw error
       }
       throw new Error(controller.signal.aborted ? 'storage_agent_timeout' : 'storage_agent_request_failed')
@@ -275,18 +280,18 @@ export class RunnerStorageAgentClient {
     }
     const manifest = raw.manifest as GenerationManifest
     if (
-      manifest.formatVersion !== 1
-      || !UUID_RE.test(manifest.volumeId)
-      || !UUID_RE.test(manifest.sandboxId)
-      || !DECIMAL_RE.test(manifest.generation)
-      || manifest.volumeId !== volumeId
-      || manifest.sandboxId !== sandboxId
-      || manifest.generation !== generation
-      || raw.generation !== manifest.generation
-      || !Number.isSafeInteger(manifest.objectCount)
-      || !Number.isSafeInteger(manifest.bytes)
-      || manifest.objectCount < 0
-      || manifest.bytes < 0
+      manifest.formatVersion !== 1 ||
+      !UUID_RE.test(manifest.volumeId) ||
+      !UUID_RE.test(manifest.sandboxId) ||
+      !DECIMAL_RE.test(manifest.generation) ||
+      manifest.volumeId !== volumeId ||
+      manifest.sandboxId !== sandboxId ||
+      manifest.generation !== generation ||
+      raw.generation !== manifest.generation ||
+      !Number.isSafeInteger(manifest.objectCount) ||
+      !Number.isSafeInteger(manifest.bytes) ||
+      manifest.objectCount < 0 ||
+      manifest.bytes < 0
     ) {
       throw new Error('storage_agent_payload_invalid')
     }
@@ -299,13 +304,13 @@ export class RunnerStorageAgentClient {
       const size = rawObject.size
       const sha256 = rawObject.sha256
       if (
-        !isSafeObjectKey(rawObject.key)
-        || !Number.isSafeInteger(size)
-        || size < 0
-        || body.byteLength !== size
-        || typeof sha256 !== 'string'
-        || !/^[a-f0-9]{64}$/.test(sha256)
-        || createHash('sha256').update(body).digest('hex') !== sha256
+        !isSafeObjectKey(rawObject.key) ||
+        !Number.isSafeInteger(size) ||
+        size < 0 ||
+        body.byteLength !== size ||
+        typeof sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(sha256) ||
+        createHash('sha256').update(body).digest('hex') !== sha256
       ) {
         throw new Error('storage_agent_payload_invalid')
       }
@@ -314,15 +319,13 @@ export class RunnerStorageAgentClient {
         body,
         size,
         sha256,
-        mode: typeof rawObject.mode === 'number' && Number.isSafeInteger(rawObject.mode)
-          ? rawObject.mode
-          : undefined,
+        mode: typeof rawObject.mode === 'number' && Number.isSafeInteger(rawObject.mode) ? rawObject.mode : undefined,
       })
     }
     if (
-      objects.length !== manifest.objectCount
-      || objects.reduce((total, object) => total + object.size, 0) !== manifest.bytes
-      || checkpointContentHash(objects) !== manifest.contentHash
+      objects.length !== manifest.objectCount ||
+      objects.reduce((total, object) => total + object.size, 0) !== manifest.bytes ||
+      checkpointContentHash(objects) !== manifest.contentHash
     ) {
       throw new Error('storage_agent_payload_invalid')
     }
@@ -388,7 +391,8 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
   }
 
   async checkpoint(input: MoveRuntimeInput): Promise<{ generation: string }> {
-    const generation = input.checkpointGeneration ?? (BigInt(input.operation.expectedFenceEpoch) + 1n).toString()
+    const generation = input.checkpointGeneration
+    if (!generation || !DECIMAL_RE.test(generation)) throw new Error('move_checkpoint_generation_missing')
     const checkpoint = await this.client.checkpoint({
       nodeId: input.operation.sourceNodeId,
       volumeId: input.operation.volumeId,
@@ -434,7 +438,7 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
       placementId: input.operation.placementId,
       nodeId: input.operation.targetNodeId,
       fenceEpoch,
-      leaseOwner: `move-worker:${input.operation.id}`,
+      leaseOwner: input.operation.leaseOwner ?? '',
     })
     if (!placement.leaseExpiresAt) throw new Error('workspace_lease_expired')
     await this.client.start({
@@ -473,10 +477,11 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
   }
 
   private lease(input: MoveRuntimeInput, fenceEpoch: string, leaseExpiresAt?: string): AgentLease {
+    if (!input.operation.leaseOwner) throw new Error('workspace_lease_missing')
     return buildLease({
       operationId: input.operation.id,
       fenceEpoch,
-      leaseOwner: `move-worker:${input.operation.id}`,
+      leaseOwner: input.operation.leaseOwner,
       leaseExpiresAt,
     })
   }

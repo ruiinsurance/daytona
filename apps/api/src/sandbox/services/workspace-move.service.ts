@@ -5,6 +5,7 @@
 
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
+import { randomUUID } from 'node:crypto'
 import { Repository } from 'typeorm'
 import { WorkspaceOperation } from '../entities/workspace-operation.entity'
 import { WorkspacePlacement } from '../entities/workspace-placement.entity'
@@ -15,7 +16,6 @@ import {
   assertMoveTransition,
   isTerminalMovePhase,
   MovePhase,
-  nextMovePhase,
 } from '../local-first/workspace-move.contract'
 import { WorkspacePlacementService } from './workspace-placement.service'
 
@@ -37,6 +37,8 @@ export interface MoveRuntimeInput {
 
 @Injectable()
 export class WorkspaceMoveService {
+  private readonly workerId = randomUUID()
+
   constructor(
     @InjectRepository(WorkspaceOperation)
     private readonly operationRepository: Repository<WorkspaceOperation>,
@@ -70,10 +72,10 @@ export class WorkspaceMoveService {
     const placement = await this.placementRepository.findOne({ where: { id: input.placementId } })
     if (!placement) throw new NotFoundException('Workspace placement not found')
     if (
-      placement.ownerNodeId !== input.sourceNodeId
-      || placement.fenceEpoch !== input.expectedFenceEpoch
-      || placement.volumeId !== input.volumeId
-      || placement.sandboxId !== input.sandboxId
+      placement.ownerNodeId !== input.sourceNodeId ||
+      placement.fenceEpoch !== input.expectedFenceEpoch ||
+      placement.volumeId !== input.volumeId ||
+      placement.sandboxId !== input.sandboxId
     ) {
       throw new ConflictException('move_source_fence_conflict')
     }
@@ -139,6 +141,7 @@ export class WorkspaceMoveService {
       operation = await this.persistPhase(operation, 'quiescing', now)
     }
     if (operation.phase === 'quiescing') {
+      operation = await this.ensureCheckpointGeneration(operation, now)
       const result = await this.runPhaseResult(operation, runtime.checkpoint, runtime)
       operation.checkpointGeneration = result.generation
       operation = await this.operationRepository.save(operation)
@@ -151,9 +154,9 @@ export class WorkspaceMoveService {
     if (operation.phase === 'copying') {
       const result = await this.runPhaseResult(operation, runtime.verifyTarget, runtime)
       if (
-        !result.manifestHash
-        || !/^[a-f0-9]{64}$/.test(result.manifestHash)
-        || result.generation !== operation.checkpointGeneration
+        !result.manifestHash ||
+        !/^[a-f0-9]{64}$/.test(result.manifestHash) ||
+        result.generation !== operation.checkpointGeneration
       ) {
         operation.errorCode = 'move_phase_failed'
         await this.operationRepository.save(operation)
@@ -174,18 +177,18 @@ export class WorkspaceMoveService {
       const placement = await this.placementRepository.findOne({ where: { id: operation.placementId } })
       if (!placement) throw new NotFoundException('Workspace placement not found')
       const expectedFence = Number(operation.expectedFenceEpoch)
-      const alreadySwitched = placement.ownerNodeId === operation.targetNodeId
-        && Number(placement.fenceEpoch) === expectedFence + 1
+      const alreadySwitched =
+        placement.ownerNodeId === operation.targetNodeId && Number(placement.fenceEpoch) === expectedFence + 1
       const switched = alreadySwitched
         ? placement
         : await this.workspacePlacementService.switchOwner({
-          placementId: operation.placementId,
-          expectedOwnerNodeId: operation.sourceNodeId,
-          expectedFenceEpoch: expectedFence,
-          targetNodeId: operation.targetNodeId,
-          targetVerified: true,
-          now,
-        })
+            placementId: operation.placementId,
+            expectedOwnerNodeId: operation.sourceNodeId,
+            expectedFenceEpoch: expectedFence,
+            targetNodeId: operation.targetNodeId,
+            targetVerified: true,
+            now,
+          })
       operation.switchedFenceEpoch = String(switched.fenceEpoch)
       operation = await this.operationRepository.save(operation)
       operation = await this.persistPhase(operation, 'owner_switched', now)
@@ -212,9 +215,10 @@ export class WorkspaceMoveService {
 
   async hasBlockingOperations(nodeId: string): Promise<boolean> {
     const operations = await this.operationRepository.find()
-    return operations.some((operation) =>
-      !isTerminalMovePhase(operation.phase)
-      && (operation.sourceNodeId === nodeId || operation.targetNodeId === nodeId),
+    return operations.some(
+      (operation) =>
+        !isTerminalMovePhase(operation.phase) &&
+        (operation.sourceNodeId === nodeId || operation.targetNodeId === nodeId),
     )
   }
 
@@ -268,30 +272,57 @@ export class WorkspaceMoveService {
     }
   }
 
+  private async ensureCheckpointGeneration(operation: WorkspaceOperation, now: Date): Promise<WorkspaceOperation> {
+    if (operation.checkpointGeneration) return operation
+    const placement = await this.placementRepository.findOne({ where: { id: operation.placementId } })
+    if (!placement || !/^(0|[1-9][0-9]*)$/.test(placement.localGeneration)) {
+      operation.errorCode = 'move_generation_invalid'
+      await this.operationRepository.save(operation)
+      throw new Error('move_generation_invalid')
+    }
+    operation.checkpointGeneration = (BigInt(placement.localGeneration) + 1n).toString()
+    operation.updatedAt = now
+    return this.operationRepository.save(operation)
+  }
+
   private async claimLease(operation: WorkspaceOperation, now: Date): Promise<WorkspaceOperation> {
-    const leaseOwner = `move-worker:${operation.id}`
-    const leaseExpiresAt = operation.leaseExpiresAt instanceof Date
-      ? operation.leaseExpiresAt
-      : operation.leaseExpiresAt ? new Date(operation.leaseExpiresAt) : null
+    const leaseOwner = `move-worker:${this.workerId}:${operation.id}`
+    const leaseExpiresAt = new Date(now.getTime() + 60_000)
+    const result = await this.operationRepository
+      .createQueryBuilder()
+      .update(WorkspaceOperation)
+      .set({
+        leaseOwner,
+        leaseExpiresAt,
+        updatedAt: now,
+      })
+      .where('id = :operationId', { operationId: operation.id })
+      .andWhere('"phase" <> :complete', { complete: 'complete' })
+      .andWhere('("leaseOwner" IS NULL OR "leaseExpiresAt" <= :now OR "leaseOwner" = :leaseOwner)', {
+        now,
+        leaseOwner,
+      })
+      .returning('*')
+      .execute()
+    const claimed = result.raw?.[0] as WorkspaceOperation | undefined
+    if (claimed) return claimed
+
+    const current = await this.find(operation.id)
+    if (isTerminalMovePhase(current.phase)) return current
+    const currentExpiry =
+      current.leaseExpiresAt instanceof Date
+        ? current.leaseExpiresAt
+        : current.leaseExpiresAt
+          ? new Date(current.leaseExpiresAt)
+          : null
     if (
-      operation.leaseOwner
-      && operation.leaseOwner !== leaseOwner
-      && leaseExpiresAt
-      && leaseExpiresAt.getTime() > now.getTime()
+      current.leaseOwner &&
+      current.leaseOwner !== leaseOwner &&
+      (!currentExpiry || currentExpiry.getTime() > now.getTime())
     ) {
       throw new ConflictException('move_operation_lease_conflict')
     }
-    if (
-      operation.leaseOwner !== leaseOwner
-      || !leaseExpiresAt
-      || leaseExpiresAt.getTime() <= now.getTime()
-    ) {
-      operation.leaseOwner = leaseOwner
-      operation.leaseExpiresAt = new Date(now.getTime() + 60_000)
-      operation.updatedAt = now
-      return this.operationRepository.save(operation)
-    }
-    return operation
+    throw new ConflictException('move_operation_lease_conflict')
   }
 }
 

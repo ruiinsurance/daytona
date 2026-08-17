@@ -15,13 +15,21 @@ function makeService() {
     sandboxId: SANDBOX_ID,
     ownerNodeId: SOURCE_NODE_ID,
     fenceEpoch: '3',
+    localGeneration: '3',
+    cosGeneration: '3',
   }
   const operations: any[] = []
+  const claimExecutions: any[] = []
   const operationRepository = {
-    findOne: vi.fn(async ({ where }: any) => operations.find((row) =>
-      (where.id && row.id === where.id)
-      || (where.idempotencyKey && row.idempotencyKey === where.idempotencyKey)
-      || (where.placementId && row.placementId === where.placementId)) ?? null),
+    findOne: vi.fn(
+      async ({ where }: any) =>
+        operations.find(
+          (row) =>
+            (where.id && row.id === where.id) ||
+            (where.idempotencyKey && row.idempotencyKey === where.idempotencyKey) ||
+            (where.placementId && row.placementId === where.placementId),
+        ) ?? null,
+    ),
     find: vi.fn(async () => operations),
     create: vi.fn((value) => value),
     save: vi.fn(async (value) => {
@@ -29,6 +37,48 @@ function makeService() {
       if (index === -1) operations.push(value)
       else operations[index] = value
       return value
+    }),
+    createQueryBuilder: vi.fn(() => {
+      const state: { values?: Record<string, unknown>; params: Record<string, unknown> } = { params: {} }
+      const builder = {
+        update: vi.fn().mockReturnThis(),
+        set: vi.fn((values) => {
+          state.values = values
+          return builder
+        }),
+        where: vi.fn((_query, params) => {
+          Object.assign(state.params, params)
+          return builder
+        }),
+        andWhere: vi.fn((_query, params) => {
+          Object.assign(state.params, params)
+          return builder
+        }),
+        returning: vi.fn().mockReturnThis(),
+        execute: vi.fn(async () => {
+          claimExecutions.push({ values: state.values, params: state.params })
+          const operation = operations.find((row) => row.id === state.params.operationId)
+          if (!operation) return { raw: [], affected: 0 }
+          const now = state.params.now as Date
+          const expiresAt =
+            operation.leaseExpiresAt instanceof Date
+              ? operation.leaseExpiresAt
+              : operation.leaseExpiresAt
+                ? new Date(operation.leaseExpiresAt)
+                : null
+          if (
+            operation.leaseOwner &&
+            operation.leaseOwner !== state.params.leaseOwner &&
+            expiresAt &&
+            expiresAt.getTime() > now.getTime()
+          ) {
+            return { raw: [], affected: 0 }
+          }
+          Object.assign(operation, state.values)
+          return { raw: [operation], affected: 1 }
+        }),
+      }
+      return builder
     }),
   }
   const placementRepository = {
@@ -46,7 +96,15 @@ function makeService() {
     storageNodeRepository as any,
     workspacePlacementService as any,
   )
-  return { service, operations, operationRepository, storageNodeRepository, workspacePlacementService }
+  return {
+    service,
+    operations,
+    operationRepository,
+    placementRepository,
+    claimExecutions,
+    storageNodeRepository,
+    workspacePlacementService,
+  }
 }
 
 const request = {
@@ -73,27 +131,57 @@ describe('WorkspaceMoveService', () => {
     const { service } = makeService()
     await service.request(request)
 
-    await expect(service.request({
-      ...request,
-      operationId: '77777777-7777-4777-8777-777777777777',
-      idempotencyKey: 'move-test-2',
-    })).rejects.toThrow('move_operation_in_progress')
+    await expect(
+      service.request({
+        ...request,
+        operationId: '77777777-7777-4777-8777-777777777777',
+        idempotencyKey: 'move-test-2',
+      }),
+    ).rejects.toThrow('move_operation_in_progress')
   })
 
   it('does not take over an unexpired operation lease owned by another worker', async () => {
-    const { service, operations } = makeService()
+    const { service, operations, claimExecutions } = makeService()
     await service.request(request)
     operations[0].leaseOwner = 'move-worker:other'
     operations[0].leaseExpiresAt = new Date(Date.now() + 60_000)
 
-    await expect(service.run(OPERATION_ID, {
-      quiesce: vi.fn(),
+    await expect(
+      service.run(OPERATION_ID, {
+        quiesce: vi.fn(),
+        checkpoint: vi.fn(),
+        copy: vi.fn(),
+        verifyTarget: vi.fn(),
+        startTarget: vi.fn(),
+        retainSource: vi.fn(),
+      } as any),
+    ).rejects.toThrow('move_operation_lease_conflict')
+    expect(claimExecutions).toHaveLength(1)
+    expect(claimExecutions[0].params.leaseOwner).toMatch(/^move-worker:/)
+  })
+
+  it('does not let a second service instance renew the first worker lease', async () => {
+    const first = makeService()
+    await first.service.request(request)
+    const second = new (WorkspaceMoveService as any)(
+      first.operationRepository,
+      first.placementRepository,
+      first.storageNodeRepository,
+      first.workspacePlacementService,
+    )
+    const runtime = {
+      quiesce: vi.fn(async () => {
+        throw new Error('injected_worker_failure')
+      }),
       checkpoint: vi.fn(),
       copy: vi.fn(),
       verifyTarget: vi.fn(),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
-    } as any)).rejects.toThrow('move_operation_lease_conflict')
+    }
+
+    await expect(first.service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
+    await expect(second.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_operation_lease_conflict')
   })
 
   it('runs every move phase and switches owner only after target verification', async () => {
@@ -106,9 +194,15 @@ describe('WorkspaceMoveService', () => {
     })
     const runtime = {
       quiesce: vi.fn(async () => events.push('quiesce')),
-      checkpoint: vi.fn(async () => { events.push('checkpoint'); return { generation: '4' } }),
+      checkpoint: vi.fn(async () => {
+        events.push('checkpoint')
+        return { generation: '4' }
+      }),
       copy: vi.fn(async () => events.push('copy')),
-      verifyTarget: vi.fn(async () => { events.push('verify'); return { generation: '4', manifestHash: 'a'.repeat(64) } }),
+      verifyTarget: vi.fn(async () => {
+        events.push('verify')
+        return { generation: '4', manifestHash: 'a'.repeat(64) }
+      }),
       startTarget: vi.fn(async () => events.push('start-target')),
       retainSource: vi.fn(async () => events.push('retain-source')),
     }
@@ -119,10 +213,13 @@ describe('WorkspaceMoveService', () => {
     expect(result.sourceRetained).toBe(true)
     expect(result.switchedFenceEpoch).toBe('4')
     expect(events).toEqual(['quiesce', 'checkpoint', 'copy', 'verify', 'switch-owner', 'start-target', 'retain-source'])
-    expect(workspacePlacementService.switchOwner).toHaveBeenCalledWith(expect.objectContaining({
-      targetVerified: true,
-      expectedFenceEpoch: 3,
-    }))
+    expect(workspacePlacementService.switchOwner).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetVerified: true,
+        expectedFenceEpoch: 3,
+      }),
+    )
+    expect(runtime.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ checkpointGeneration: '4' }))
     expect(events.indexOf('verify')).toBeLessThan(events.indexOf('switch-owner'))
     expect(operations[0].phase).toBe('complete')
   })
@@ -134,7 +231,12 @@ describe('WorkspaceMoveService', () => {
     const runtime = {
       quiesce: vi.fn(),
       checkpoint: vi.fn(async () => ({ generation: '4' })),
-      copy: vi.fn(async () => { if (fail) { fail = false; throw new Error('copy interruption') } }),
+      copy: vi.fn(async () => {
+        if (fail) {
+          fail = false
+          throw new Error('copy interruption')
+        }
+      }),
       verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
@@ -189,35 +291,56 @@ describe('WorkspaceMoveService', () => {
     ['verifyTarget', 'copying'],
     ['startTarget', 'owner_switched'],
     ['retainSource', 'target_started'],
-  ] as const)('resumes after a crash at the %s phase without losing the durable operation', async (failedMethod, phase) => {
-    const { service, operations } = makeService()
-    await service.request(request)
-    let fail = true
-    const runtime = {
-      quiesce: vi.fn(async () => {
-        if (failedMethod === 'quiesce' && fail) { fail = false; throw new Error('injected_quiesce_crash') }
-      }),
-      checkpoint: vi.fn(async () => {
-        if (failedMethod === 'checkpoint' && fail) { fail = false; throw new Error('injected_checkpoint_crash') }
-        return { generation: '4' }
-      }),
-      copy: vi.fn(async () => {
-        if (failedMethod === 'copy' && fail) { fail = false; throw new Error('injected_copy_crash') }
-      }),
-      verifyTarget: vi.fn(async () => {
-        if (failedMethod === 'verifyTarget' && fail) { fail = false; throw new Error('injected_verify_crash') }
-        return { generation: '4', manifestHash: 'a'.repeat(64) }
-      }),
-      startTarget: vi.fn(async () => {
-        if (failedMethod === 'startTarget' && fail) { fail = false; throw new Error('injected_start_crash') }
-      }),
-      retainSource: vi.fn(async () => {
-        if (failedMethod === 'retainSource' && fail) { fail = false; throw new Error('injected_retain_crash') }
-      }),
-    }
+  ] as const)(
+    'resumes after a crash at the %s phase without losing the durable operation',
+    async (failedMethod, phase) => {
+      const { service, operations } = makeService()
+      await service.request(request)
+      let fail = true
+      const runtime = {
+        quiesce: vi.fn(async () => {
+          if (failedMethod === 'quiesce' && fail) {
+            fail = false
+            throw new Error('injected_quiesce_crash')
+          }
+        }),
+        checkpoint: vi.fn(async () => {
+          if (failedMethod === 'checkpoint' && fail) {
+            fail = false
+            throw new Error('injected_checkpoint_crash')
+          }
+          return { generation: '4' }
+        }),
+        copy: vi.fn(async () => {
+          if (failedMethod === 'copy' && fail) {
+            fail = false
+            throw new Error('injected_copy_crash')
+          }
+        }),
+        verifyTarget: vi.fn(async () => {
+          if (failedMethod === 'verifyTarget' && fail) {
+            fail = false
+            throw new Error('injected_verify_crash')
+          }
+          return { generation: '4', manifestHash: 'a'.repeat(64) }
+        }),
+        startTarget: vi.fn(async () => {
+          if (failedMethod === 'startTarget' && fail) {
+            fail = false
+            throw new Error('injected_start_crash')
+          }
+        }),
+        retainSource: vi.fn(async () => {
+          if (failedMethod === 'retainSource' && fail) {
+            fail = false
+            throw new Error('injected_retain_crash')
+          }
+        }),
+      }
 
-    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
-    expect(operations[0].phase).toBe(phase)
-    await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
-  })
+      await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
+      expect(operations[0].phase).toBe(phase)
+      await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
+    },
+  )
 })
