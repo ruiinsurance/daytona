@@ -65,7 +65,15 @@ export class WorkspacePlacementService {
         const concurrent = await this.placementRepository.findOne({
           where: { volumeId: input.volumeId, subpath: input.subpath },
         })
-        if (concurrent) return concurrent
+        if (concurrent) {
+          if (concurrent.sandboxId !== input.sandboxId) {
+            throw new ConflictException('workspace_identity_conflict')
+          }
+          if (input.ownerNodeId && concurrent.ownerNodeId !== input.ownerNodeId) {
+            throw new ConflictException('workspace_owner_affinity_conflict')
+          }
+          return concurrent
+        }
       }
       throw error
     }
@@ -128,7 +136,12 @@ export class WorkspacePlacementService {
     assertLeaseOwner(input.leaseOwner)
     const now = input.now ?? new Date()
     const durationMs = input.leaseDurationMs ?? 30_000
-    if (!Number.isSafeInteger(input.fenceEpoch) || input.fenceEpoch < 0 || durationMs <= 0 || durationMs > 10 * 60 * 1000) {
+    if (
+      !Number.isSafeInteger(input.fenceEpoch) ||
+      input.fenceEpoch < 0 ||
+      durationMs <= 0 ||
+      durationMs > 10 * 60 * 1000
+    ) {
       throw new BadRequestException('workspace_lease_input_invalid')
     }
 
@@ -189,15 +202,18 @@ export class WorkspacePlacementService {
     input: { nodeId: string; fenceEpoch: number; leaseOwner: string; now?: Date },
   ): void {
     if (placement.leaseOwner !== input.leaseOwner) throw new ConflictException('workspace_lease_owner_conflict')
-    assertWorkspaceFence({
-      ownerNodeId: placement.ownerNodeId ?? '',
-      fenceEpoch: Number(placement.fenceEpoch),
-      leaseExpiresAt: placement.leaseExpiresAt ?? new Date(0),
-    }, {
-      nodeId: input.nodeId,
-      fenceEpoch: input.fenceEpoch,
-      now: input.now ?? new Date(),
-    })
+    assertWorkspaceFence(
+      {
+        ownerNodeId: placement.ownerNodeId ?? '',
+        fenceEpoch: Number(placement.fenceEpoch),
+        leaseExpiresAt: placement.leaseExpiresAt ?? new Date(0),
+      },
+      {
+        nodeId: input.nodeId,
+        fenceEpoch: input.fenceEpoch,
+        now: input.now ?? new Date(),
+      },
+    )
   }
 
   async switchOwner(input: {
