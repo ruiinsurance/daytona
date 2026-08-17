@@ -206,9 +206,8 @@ export class WorkspaceMoveService {
     if (operation.phase === 'source_retained') {
       operation.leaseOwner = null
       operation.leaseExpiresAt = null
-      operation = await this.persistPhase(operation, 'complete', now)
       operation.completedAt = now
-      operation = await this.operationRepository.save(operation)
+      operation = await this.persistPhase(operation, 'complete', now)
     }
     return operation
   }

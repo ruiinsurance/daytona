@@ -19,6 +19,7 @@ function makeService() {
     cosGeneration: '3',
   }
   const operations: any[] = []
+  const saveSnapshots: any[] = []
   const claimExecutions: any[] = []
   const operationRepository = {
     findOne: vi.fn(
@@ -33,6 +34,7 @@ function makeService() {
     find: vi.fn(async () => operations),
     create: vi.fn((value) => value),
     save: vi.fn(async (value) => {
+      saveSnapshots.push(structuredClone(value))
       const index = operations.findIndex((row) => row.id === value.id)
       if (index === -1) operations.push(value)
       else operations[index] = value
@@ -99,6 +101,7 @@ function makeService() {
   return {
     service,
     operations,
+    saveSnapshots,
     operationRepository,
     placementRepository,
     claimExecutions,
@@ -185,7 +188,7 @@ describe('WorkspaceMoveService', () => {
   })
 
   it('runs every move phase and switches owner only after target verification', async () => {
-    const { service, operations, workspacePlacementService } = makeService()
+    const { service, operations, saveSnapshots, workspacePlacementService } = makeService()
     await service.request(request)
     const events: string[] = []
     workspacePlacementService.switchOwner.mockImplementation(async () => {
@@ -212,6 +215,10 @@ describe('WorkspaceMoveService', () => {
     expect(result.phase).toBe('complete')
     expect(result.sourceRetained).toBe(true)
     expect(result.switchedFenceEpoch).toBe('4')
+    expect(result.completedAt).toEqual(new Date('2026-08-17T00:00:00.000Z'))
+    expect(saveSnapshots.find((snapshot) => snapshot.phase === 'complete')?.completedAt).toEqual(
+      new Date('2026-08-17T00:00:00.000Z'),
+    )
     expect(events).toEqual(['quiesce', 'checkpoint', 'copy', 'verify', 'switch-owner', 'start-target', 'retain-source'])
     expect(workspacePlacementService.switchOwner).toHaveBeenCalledWith(
       expect.objectContaining({
