@@ -34,6 +34,7 @@ function sandbox() {
 
 function createAdapter() {
   const jobService = { createJob: jest.fn().mockResolvedValue(undefined) }
+  const sandboxRepository = { findOne: jest.fn().mockResolvedValue(sandbox()) }
   const storageNodeService = {
     findByRunnerId: jest.fn().mockResolvedValue({
       nodeId: NODE_ID,
@@ -53,15 +54,16 @@ function createAdapter() {
       leaseOwner: `runner:${RUNNER_ID}:sandbox:${SANDBOX_ID}`,
       leaseExpiresAt: new Date(Date.now() + 30_000),
     }),
+    assertStartAllowed: jest.fn().mockResolvedValue(undefined),
   }
   const adapter = new RunnerAdapterV2(
-    {} as any,
+    sandboxRepository as any,
     {} as any,
     jobService as any,
     storageNodeService as any,
     workspacePlacementService as any,
   )
-  return { adapter, jobService, storageNodeService, workspacePlacementService }
+  return { adapter, jobService, sandboxRepository, storageNodeService, workspacePlacementService }
 }
 
 describe('RunnerAdapterV2 local-first storage', () => {
@@ -83,6 +85,9 @@ describe('RunnerAdapterV2 local-first storage', () => {
     expect(workspacePlacementService.acquireWriterLease).toHaveBeenCalledWith(expect.objectContaining({
       nodeId: NODE_ID,
       fenceEpoch: 1,
+    }))
+    expect(workspacePlacementService.assertStartAllowed).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: NODE_ID,
     }))
     expect(payload.volumes).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -112,5 +117,37 @@ describe('RunnerAdapterV2 local-first storage', () => {
       { volumeId: VOLUME_ID, mountPath: '/config', subpath: SUBPATH },
     ])
     expect(workspacePlacementService.ensurePlacement).not.toHaveBeenCalled()
+  })
+
+  it('blocks a local-first start before acquiring a writer lease when recovery is required', async () => {
+    const { adapter, jobService, workspacePlacementService } = createAdapter()
+    workspacePlacementService.assertStartAllowed.mockRejectedValue(new Error('recovery_required'))
+    await adapter.init({ id: RUNNER_ID, apiVersion: '2' } as any)
+
+    await expect(adapter.startSandbox(SANDBOX_ID, 'sandbox-auth-token', {
+      storageBackend: 'local-first',
+    })).rejects.toThrow('recovery_required')
+
+    expect(workspacePlacementService.acquireWriterLease).not.toHaveBeenCalled()
+    expect(jobService.createJob).not.toHaveBeenCalled()
+  })
+
+  it('checks an existing placement before ensurePlacement on a replacement runner', async () => {
+    const { adapter, jobService, workspacePlacementService } = createAdapter()
+    workspacePlacementService.findBySandboxId.mockResolvedValue({
+      ownerNodeId: '77777777-7777-4777-8777-777777777777',
+      localGeneration: '8',
+      cosGeneration: '7',
+    })
+    workspacePlacementService.assertStartAllowed.mockRejectedValue(new Error('recovery_required'))
+    await adapter.init({ id: RUNNER_ID, apiVersion: '2' } as any)
+
+    await expect(adapter.startSandbox(SANDBOX_ID, 'sandbox-auth-token', {
+      storageBackend: 'local-first',
+    })).rejects.toThrow('recovery_required')
+
+    expect(workspacePlacementService.ensurePlacement).not.toHaveBeenCalled()
+    expect(workspacePlacementService.acquireWriterLease).not.toHaveBeenCalled()
+    expect(jobService.createJob).not.toHaveBeenCalled()
   })
 })

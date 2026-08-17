@@ -4,6 +4,7 @@ import { Repository } from 'typeorm'
 import { WorkspacePlacement } from '../entities/workspace-placement.entity'
 import { StorageNodeService } from './storage-node.service'
 import { assertWorkspaceFence } from '../local-first/storage-node-contract'
+import { chooseRecoverySource } from '../local-first/workspace-generation.contract'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VOLUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -79,6 +80,39 @@ export class WorkspacePlacementService {
   async findBySandboxId(sandboxId: string): Promise<WorkspacePlacement | null> {
     assertUuid(sandboxId, 'sandbox_id_invalid')
     return this.placementRepository.findOne({ where: { sandboxId } })
+  }
+
+  async assertStartAllowed(input: { placement: WorkspacePlacement; nodeId: string; now?: Date }): Promise<void> {
+    assertUuid(input.nodeId, 'node_id_invalid')
+    const ownerNodeId = input.placement.ownerNodeId
+    if (!ownerNodeId) throw new ConflictException('recovery_required')
+    assertUuid(ownerNodeId, 'owner_node_id_invalid')
+
+    const now = input.now ?? new Date()
+    let ownerAvailable = true
+    try {
+      // Reuse the scheduler's owner-affinity health policy for existing placements.
+      await this.storageNodeService.chooseNode({
+        now,
+        requiredBytes: 0,
+        requiredInodes: 0,
+        ownerNodeId,
+      })
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== 'owner_node_unavailable') throw error
+      ownerAvailable = false
+    }
+
+    const recoverySource = chooseRecoverySource({
+      ownerAvailable,
+      localGeneration: input.placement.localGeneration,
+      cosGeneration: input.placement.cosGeneration,
+      // cosGeneration is advanced only after an immutable generation is committed.
+      latestCommittedGeneration: input.placement.cosGeneration,
+    })
+    if (recoverySource === 'recovery_required') throw new ConflictException('recovery_required')
+    if (!ownerAvailable) throw new ConflictException('owner_node_unavailable')
+    if (ownerNodeId !== input.nodeId) throw new ConflictException('workspace_owner_affinity_conflict')
   }
 
   async acquireWriterLease(input: {

@@ -78,6 +78,55 @@ describe('WorkspacePlacementService', () => {
     expect(chooseNode).toHaveBeenCalledOnce()
   })
 
+  it('keeps an available placement owner-affine and does not let another runner start it', async () => {
+    const { repository } = queryRepository([])
+    const chooseNode = vi.fn().mockResolvedValue({ nodeId: RUNNER_A, reason: 'owner_affinity' })
+    const service = new WorkspacePlacementService(repository, { chooseNode } as any)
+
+    await expect(
+      service.assertStartAllowed({
+        placement: placement({ localGeneration: '8', cosGeneration: '7' }),
+        nodeId: RUNNER_B,
+        now: NOW,
+      }),
+    ).rejects.toThrow('workspace_owner_affinity_conflict')
+
+    expect(chooseNode).toHaveBeenCalledWith({
+      now: NOW,
+      requiredBytes: 0,
+      requiredInodes: 0,
+      ownerNodeId: RUNNER_A,
+    })
+  })
+
+  it('fails closed with recovery_required when the owner is unavailable and COS is behind local state', async () => {
+    const { repository } = queryRepository([])
+    const chooseNode = vi.fn().mockRejectedValue(new Error('owner_node_unavailable'))
+    const service = new WorkspacePlacementService(repository, { chooseNode } as any)
+
+    await expect(
+      service.assertStartAllowed({
+        placement: placement({ localGeneration: '8', cosGeneration: '7' }),
+        nodeId: RUNNER_B,
+        now: NOW,
+      }),
+    ).rejects.toThrow('recovery_required')
+  })
+
+  it('does not mount an unavailable owner as RW even when COS has caught up', async () => {
+    const { repository } = queryRepository([])
+    const chooseNode = vi.fn().mockRejectedValue(new Error('owner_node_unavailable'))
+    const service = new WorkspacePlacementService(repository, { chooseNode } as any)
+
+    await expect(
+      service.assertStartAllowed({
+        placement: placement({ localGeneration: '8', cosGeneration: '8' }),
+        nodeId: RUNNER_B,
+        now: NOW,
+      }),
+    ).rejects.toThrow('owner_node_unavailable')
+  })
+
   it('acquires a writer lease only with the current owner and fence epoch', async () => {
     const current = placement()
     const { repository, query } = queryRepository([current])

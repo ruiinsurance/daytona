@@ -274,6 +274,13 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     const storageNode = await this.storageNodeService.findByRunnerId(this.runner.id)
     if (!storageNode) throw new Error('local-first storage node is not registered')
+    const existingPlacement = await this.workspacePlacementService.findBySandboxId(sandbox.id)
+    if (existingPlacement) {
+      await this.workspacePlacementService.assertStartAllowed({
+        placement: existingPlacement,
+        nodeId: storageNode.nodeId,
+      })
+    }
     const placement = await this.workspacePlacementService.ensurePlacement({
       volumeId: workspace.volumeId,
       subpath: workspace.subpath,
@@ -282,6 +289,12 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       requiredInodes: 1,
       ownerNodeId: storageNode.nodeId,
     })
+    if (!existingPlacement) {
+      await this.workspacePlacementService.assertStartAllowed({
+        placement,
+        nodeId: storageNode.nodeId,
+      })
+    }
     const fenceEpoch = Number(placement.fenceEpoch)
     if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch <= 0 || placement.ownerNodeId !== storageNode.nodeId) {
       throw new Error('local-first placement fence is invalid')

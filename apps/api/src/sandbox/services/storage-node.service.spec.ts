@@ -135,6 +135,43 @@ describe('StorageNodeService', () => {
     })).resolves.toMatchObject({ nodeId: secondNode })
   })
 
+  it('does not treat a stale or offline owner as available for owner affinity', async () => {
+    const repos = repositories()
+    const service = new StorageNodeService(repos.nodeRepository, repos.placementRepository)
+    await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
+    await service.transition(NODE_ID, StorageNodeState.ACTIVE)
+    const now = new Date('2026-08-17T00:00:00.000Z')
+    await service.heartbeat({
+      nodeId: NODE_ID,
+      runnerId: RUNNER_ID,
+      capacityBytes: 1000,
+      usedBytes: 0,
+      capacityInodes: 100,
+      usedInodes: 0,
+      heartbeatAt: new Date(now.getTime() - 60_001),
+    })
+
+    await expect(
+      service.chooseNode({
+        now,
+        requiredBytes: 0,
+        requiredInodes: 0,
+        ownerNodeId: NODE_ID,
+      }),
+    ).rejects.toThrow('owner_node_unavailable')
+
+    repos.nodes[0].heartbeatAt = now
+    repos.nodes[0].state = StorageNodeState.OFFLINE
+    await expect(
+      service.chooseNode({
+        now,
+        requiredBytes: 0,
+        requiredInodes: 0,
+        ownerNodeId: NODE_ID,
+      }),
+    ).rejects.toThrow('owner_node_unavailable')
+  })
+
   it('refuses drained or removed lifecycle completion while a move operation is pending', async () => {
     const repos = repositories()
     const operations = [{ phase: 'copying', sourceNodeId: NODE_ID, targetNodeId: '33333333-3333-4333-8333-333333333333' }]
