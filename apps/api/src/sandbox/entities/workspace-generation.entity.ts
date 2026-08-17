@@ -14,6 +14,9 @@ export class WorkspaceGeneration {
   id: string
 
   @Column({ type: 'uuid' })
+  operationId: string
+
+  @Column({ type: 'uuid' })
   placementId: string
 
   @Column({ type: 'varchar', length: 128 })

@@ -135,7 +135,16 @@ describe('WorkspaceGenerationService', () => {
         return true
       }),
     }
-    const source = { create: vi.fn(async () => snapshot) }
+    const source = {
+      create: vi.fn(async (input: { operationId?: string; nextGeneration: string }) => {
+        const intent = generationRows.find((row) => row.generation === input.nextGeneration)
+        expect(intent).toMatchObject({
+          state: WorkspaceGenerationState.CHECKPOINTING,
+          operationId: input.operationId,
+        })
+        return snapshot
+      }),
+    }
 
     const result = await service.reconcile({
       placementId: PLACEMENT_ID,
@@ -151,12 +160,13 @@ describe('WorkspaceGenerationService', () => {
     expect(current.dirty).toBe(false)
     expect(source.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        operationId: PLACEMENT_ID,
+        operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         fenceEpoch: '1',
         leaseOwner: expect.stringMatching(new RegExp(`^generation-worker:[0-9a-f-]+:${PLACEMENT_ID}$`)),
         leaseExpiresAt: expect.any(String),
       }),
     )
+    expect(source.create.mock.calls[0][0].operationId).not.toBe(PLACEMENT_ID)
     expect(workspacePlacementService.acquireWriterLease).toHaveBeenCalledWith(
       expect.objectContaining({
         placementId: PLACEMENT_ID,
@@ -207,6 +217,39 @@ describe('WorkspaceGenerationService', () => {
     })
     expect(current.cosGeneration).toBe('0')
     expect(current.dirty).toBe(true)
+  })
+
+  it('retains the checkpoint operation id across a source crash and retry', async () => {
+    const { service, generationRows } = setup()
+    let fail = true
+    const source = {
+      create: vi.fn(async () => {
+        if (fail) {
+          fail = false
+          throw new Error('checkpoint interruption')
+        }
+        return checkpoint()
+      }),
+    }
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn().mockResolvedValue(checkpoint().manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn().mockResolvedValue(null),
+      compareAndSetLatest: vi.fn().mockResolvedValue(true),
+    }
+
+    await expect(service.reconcile({ placementId: PLACEMENT_ID, source, store })).rejects.toThrow(
+      'checkpoint interruption',
+    )
+    const operationId = generationRows[0].operationId
+    expect(generationRows[0]).toMatchObject({ state: WorkspaceGenerationState.FAILED, operationId })
+
+    await expect(service.reconcile({ placementId: PLACEMENT_ID, source, store })).resolves.toMatchObject({
+      outcome: 'committed',
+    })
+    expect(source.create).toHaveBeenLastCalledWith(expect.objectContaining({ operationId }))
   })
 
   it('rejects an object whose bytes do not match its advertised digest before upload', async () => {

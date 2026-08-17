@@ -100,53 +100,56 @@ export class WorkspaceGenerationService {
     }
 
     const nextGeneration = (localGeneration + 1n).toString()
+    const nextGenerationRow = await this.generationRepository.findOne({
+      where: { placementId: placement.id, generation: nextGeneration },
+    })
+    if (nextGenerationRow?.state === WorkspaceGenerationState.COMMITTED) {
+      return this.publishCommittedLatest({
+        placement,
+        generation: nextGeneration,
+        workspaceKey,
+        generationRow: nextGenerationRow,
+        store: input.store,
+      })
+    }
+
     const checkpointLease = await this.acquireCheckpointLease(placement, input.now ?? new Date())
+    let generation: WorkspaceGeneration
     try {
-      const checkpoint = await input.source.create({
-        volumeId: placement.volumeId,
-        sandboxId: placement.sandboxId,
-        sourcePath:
-          input.sourcePath ??
-          `/srv/kortix-storage/nodes/${placement.ownerNodeId}/volumes/${placement.volumeId}/sandboxes/${placement.sandboxId}/workspace`,
+      generation = await this.prepareGenerationIntent(
+        placement,
         nextGeneration,
-        ownerNodeId: placement.ownerNodeId,
-        operationId: checkpointLease.operationId,
-        fenceEpoch: checkpointLease.fenceEpoch,
-        leaseOwner: checkpointLease.leaseOwner,
-        leaseExpiresAt: checkpointLease.leaseExpiresAt,
-      })
-      if (checkpoint.generation !== nextGeneration) throw new ConflictException('checkpoint_generation_conflict')
-      assertCheckpointIntegrity(checkpoint, placement.volumeId, placement.sandboxId, nextGeneration)
+        nextGenerationRow,
+        input.now ?? new Date(),
+      )
 
-      const existing = await this.generationRepository.findOne({
-        where: { placementId: placement.id, generation: nextGeneration },
-      })
-      if (existing?.state === WorkspaceGenerationState.COMMITTED) {
-        return this.publishCommittedLatest({
-          placement,
-          generation: nextGeneration,
-          workspaceKey,
-          generationRow: existing,
-          store: input.store,
-        })
-      }
-
-      const generation =
-        existing ??
-        this.generationRepository.create({
-          placementId: placement.id,
+      let checkpoint: ImmutableCheckpoint
+      try {
+        checkpoint = await input.source.create({
           volumeId: placement.volumeId,
           sandboxId: placement.sandboxId,
-          generation: nextGeneration,
-          state: WorkspaceGenerationState.CHECKPOINTED,
-          sourcePath: checkpoint.sourcePath,
-          manifestHash: manifestHash(checkpoint.manifest),
-          objectCount: String(checkpoint.manifest.objectCount),
-          bytes: String(checkpoint.manifest.bytes),
-          manifest: Object.fromEntries(Object.entries(checkpoint.manifest)),
-          errorCode: null,
-          committedAt: null,
+          sourcePath:
+            input.sourcePath ??
+            `/srv/kortix-storage/nodes/${placement.ownerNodeId}/volumes/${placement.volumeId}/sandboxes/${placement.sandboxId}/workspace`,
+          nextGeneration,
+          ownerNodeId: placement.ownerNodeId,
+          operationId: generation.operationId,
+          fenceEpoch: checkpointLease.fenceEpoch,
+          leaseOwner: checkpointLease.leaseOwner,
+          leaseExpiresAt: checkpointLease.leaseExpiresAt,
         })
+        if (checkpoint.generation !== nextGeneration) throw new ConflictException('checkpoint_generation_conflict')
+        assertCheckpointIntegrity(checkpoint, placement.volumeId, placement.sandboxId, nextGeneration)
+      } catch (error) {
+        await this.markGenerationFailed(generation, placement, 'checkpoint_failed')
+        throw error
+      }
+
+      generation.sourcePath = checkpoint.sourcePath
+      generation.manifestHash = manifestHash(checkpoint.manifest)
+      generation.objectCount = String(checkpoint.manifest.objectCount)
+      generation.bytes = String(checkpoint.manifest.bytes)
+      generation.manifest = Object.fromEntries(Object.entries(checkpoint.manifest))
       generation.state = WorkspaceGenerationState.CHECKPOINTED
       generation.errorCode = null
       await this.generationRepository.save(generation)
@@ -193,10 +196,57 @@ export class WorkspaceGenerationService {
     }
   }
 
+  private async prepareGenerationIntent(
+    placement: WorkspacePlacement,
+    generation: string,
+    existing: WorkspaceGeneration | null,
+    now: Date,
+  ): Promise<WorkspaceGeneration> {
+    if (existing) {
+      if (!existing.operationId) throw new ConflictException('generation_operation_missing')
+      existing.state = WorkspaceGenerationState.CHECKPOINTING
+      existing.errorCode = null
+      existing.updatedAt = now
+      return this.generationRepository.save(existing)
+    }
+
+    const intent = this.generationRepository.create({
+      operationId: randomUUID(),
+      placementId: placement.id,
+      volumeId: placement.volumeId,
+      sandboxId: placement.sandboxId,
+      generation,
+      state: WorkspaceGenerationState.CHECKPOINTING,
+      sourcePath: `pending:${placement.id}:${generation}`,
+      manifestHash: '0'.repeat(64),
+      objectCount: '0',
+      bytes: '0',
+      manifest: {},
+      errorCode: null,
+      committedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return this.generationRepository.save(intent)
+  }
+
+  private async markGenerationFailed(
+    generation: WorkspaceGeneration,
+    placement: WorkspacePlacement,
+    errorCode: string,
+  ): Promise<void> {
+    generation.state = WorkspaceGenerationState.FAILED
+    generation.errorCode = errorCode
+    await this.generationRepository.save(generation)
+    placement.replicationStatus = 'failed'
+    placement.dirty = true
+    await this.placementRepository.save(placement)
+  }
+
   private async acquireCheckpointLease(
     placement: WorkspacePlacement,
     now: Date,
-  ): Promise<{ operationId: string; fenceEpoch: string; leaseOwner: string; leaseExpiresAt: string }> {
+  ): Promise<{ fenceEpoch: string; leaseOwner: string; leaseExpiresAt: string }> {
     if (!placement.ownerNodeId) throw new Error('recovery_required')
     if (placement.leaseOwner) {
       const leaseExpiresAt = placement.leaseExpiresAt ? new Date(placement.leaseExpiresAt) : null
@@ -224,7 +274,6 @@ export class WorkspaceGenerationService {
     const leaseExpiresAt = new Date(leased.leaseExpiresAt)
     if (!Number.isFinite(leaseExpiresAt.getTime())) throw new ConflictException('workspace_lease_invalid')
     return {
-      operationId: placement.id,
       fenceEpoch: String(leased.fenceEpoch),
       leaseOwner,
       leaseExpiresAt: leaseExpiresAt.toISOString(),

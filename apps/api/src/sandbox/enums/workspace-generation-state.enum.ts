@@ -4,6 +4,7 @@
  */
 
 export enum WorkspaceGenerationState {
+  CHECKPOINTING = 'checkpointing',
   CHECKPOINTED = 'checkpointed',
   UPLOADING = 'uploading',
   COMMITTED = 'committed',
