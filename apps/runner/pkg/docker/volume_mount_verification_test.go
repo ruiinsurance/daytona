@@ -46,7 +46,9 @@ func TestVerifyContainerVolumeMountDevicesAcceptsMatchingDevice(t *testing.T) {
 	volume.MountPath = bindSource
 
 	dockerClient := newStartTestDockerClient(nil)
-	if err := dockerClient.verifyContainerVolumeMountDevices(context.Background(), currentProcessInspectResponse(), []dto.VolumeDTO{volume}); err != nil {
+	if err := dockerClient.verifyContainerVolumeMountDevices(
+		context.Background(), currentProcessInspectResponse(), []dto.VolumeDTO{volume}, "device-verification-test",
+	); err != nil {
 		t.Fatalf("verifyContainerVolumeMountDevices() error = %v, want matching devices to pass", err)
 	}
 }
@@ -73,7 +75,9 @@ func TestVerifyContainerVolumeMountDevicesRejectsDifferentDevice(t *testing.T) {
 	volume.MountPath = otherDevicePath
 
 	dockerClient := newStartTestDockerClient(nil)
-	err = dockerClient.verifyContainerVolumeMountDevices(context.Background(), currentProcessInspectResponse(), []dto.VolumeDTO{volume})
+	err = dockerClient.verifyContainerVolumeMountDevices(
+		context.Background(), currentProcessInspectResponse(), []dto.VolumeDTO{volume}, "device-verification-test",
+	)
 	if err == nil || !strings.Contains(err.Error(), "expected bind source device") {
 		t.Fatalf("verifyContainerVolumeMountDevices() error = %v, want a device mismatch error", err)
 	}

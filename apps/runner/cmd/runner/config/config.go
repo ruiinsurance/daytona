@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/vishvananda/netlink"
 )
@@ -42,6 +43,10 @@ type Config struct {
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
 	AWSVolumeLayout                    string        `envconfig:"AWS_VOLUME_LAYOUT" default:"per-volume-bucket" validate:"oneof=per-volume-bucket single-bucket-prefix"`
 	AWSVolumePrefix                    string        `envconfig:"AWS_VOLUME_PREFIX" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
+	LocalFirstStorageEnabled           bool          `envconfig:"LOCAL_FIRST_STORAGE_ENABLED" default:"false"`
+	LocalStorageRoot                   string        `envconfig:"LOCAL_STORAGE_ROOT" default:"/srv/kortix-storage"`
+	StorageNodeId                      string        `envconfig:"STORAGE_NODE_ID"`
+	StorageNodeIdFile                  string        `envconfig:"STORAGE_NODE_ID_FILE" default:"/var/lib/daytona/storage-node-id"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`
@@ -111,6 +116,14 @@ func GetConfig() (*Config, error) {
 		config.ApiToken = apiToken
 	}
 
+	if config.LocalFirstStorageEnabled {
+		stableNodeID, err := loadStableStorageNodeID(config.StorageNodeId, config.StorageNodeIdFile)
+		if err != nil {
+			return nil, err
+		}
+		config.StorageNodeId = stableNodeID
+	}
+
 	if config.ApiPort == 0 {
 		config.ApiPort = DEFAULT_API_PORT
 	}
@@ -124,6 +137,46 @@ func GetConfig() (*Config, error) {
 	}
 
 	return config, nil
+}
+
+func loadStableStorageNodeID(configuredID string, identityPath string) (string, error) {
+	if !filepath.IsAbs(identityPath) || filepath.Clean(identityPath) != identityPath || strings.ContainsRune(identityPath, '\x00') {
+		return "", fmt.Errorf("storage node identity file must be an absolute canonical path")
+	}
+	if configuredID != "" {
+		parsed, err := uuid.Parse(configuredID)
+		if err != nil || parsed.String() != configuredID {
+			return "", fmt.Errorf("storage node identity is invalid")
+		}
+	}
+
+	stored, err := os.ReadFile(identityPath)
+	if err == nil {
+		storedID := strings.TrimSpace(string(stored))
+		parsed, parseErr := uuid.Parse(storedID)
+		if parseErr != nil || parsed.String() != storedID {
+			return "", fmt.Errorf("persisted storage node identity is invalid")
+		}
+		if configuredID != "" && configuredID != storedID {
+			return "", fmt.Errorf("configured storage node identity conflicts with persisted identity")
+		}
+		return storedID, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read persisted storage node identity: %w", err)
+	}
+
+	stableID := configuredID
+	if stableID == "" {
+		stableID = uuid.New().String()
+	}
+	if err := os.MkdirAll(filepath.Dir(identityPath), 0o750); err != nil {
+		return "", fmt.Errorf("create storage node identity directory: %w", err)
+	}
+	if err := os.WriteFile(identityPath, []byte(stableID+"\n"), 0o640); err != nil {
+		return "", fmt.Errorf("persist storage node identity: %w", err)
+	}
+	return stableID, nil
 }
 
 func (c *Config) GetOtelHeaders() map[string]string {

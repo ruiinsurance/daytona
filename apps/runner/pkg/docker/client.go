@@ -30,6 +30,9 @@ type DockerClientConfig struct {
 	AWSDefaultBucket             string
 	AWSVolumeLayout              string
 	AWSVolumePrefix              string
+	LocalFirstStorageEnabled     bool
+	LocalStorageRoot             string
+	StorageNodeId                string
 	DaemonPath                   string
 	ComputerUsePluginPath        string
 	NetRulesManager              *netrules.NetRulesManager
@@ -150,6 +153,9 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		awsDefaultBucket:             config.AWSDefaultBucket,
 		awsVolumeLayout:              config.AWSVolumeLayout,
 		awsVolumePrefix:              config.AWSVolumePrefix,
+		localFirstStorageEnabled:     config.LocalFirstStorageEnabled,
+		localStorageRoot:             config.LocalStorageRoot,
+		storageNodeId:                config.StorageNodeId,
 		volumeMutexes:                make(map[string]*sync.Mutex),
 		daemonPath:                   config.DaemonPath,
 		computerUsePluginPath:        config.ComputerUsePluginPath,
@@ -209,6 +215,9 @@ type DockerClient struct {
 	awsDefaultBucket             string
 	awsVolumeLayout              string
 	awsVolumePrefix              string
+	localFirstStorageEnabled     bool
+	localStorageRoot             string
+	storageNodeId                string
 	volumeMutexes                map[string]*sync.Mutex
 	volumeMutexesMutex           sync.Mutex
 	daemonPath                   string

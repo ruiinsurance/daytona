@@ -125,7 +125,12 @@ func splitContainerPath(path string) []string {
 	return strings.Split(path, string(filepath.Separator))
 }
 
-func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, inspected *container.InspectResponse, volumes []dto.VolumeDTO) error {
+func (d *DockerClient) verifyContainerVolumeMountDevices(
+	_ context.Context,
+	inspected *container.InspectResponse,
+	volumes []dto.VolumeDTO,
+	sandboxID string,
+) error {
 	if inspected == nil || inspected.ContainerJSONBase == nil || inspected.State == nil {
 		return fmt.Errorf("container inspect response has no state")
 	}
@@ -135,6 +140,16 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 
 	for _, vol := range volumes {
 		baseMountPath, bindSource, err := resolveVolumeMountPaths(vol)
+		if vol.Backend == localFirstBackend {
+			bindSource, err = resolveLocalFirstVolumeSource(
+				vol,
+				d.localStorageRoot,
+				d.storageNodeId,
+				sandboxID,
+				time.Now(),
+			)
+			baseMountPath = bindSource
+		}
 		if err != nil {
 			return err
 		}
@@ -170,14 +185,19 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 	return nil
 }
 
-func (d *DockerClient) verifyContainerVolumeMounts(ctx context.Context, inspected *container.InspectResponse, volumes []dto.VolumeDTO) error {
+func (d *DockerClient) verifyContainerVolumeMounts(
+	ctx context.Context,
+	inspected *container.InspectResponse,
+	volumes []dto.VolumeDTO,
+	sandboxID string,
+) error {
 	if len(volumes) == 0 {
 		return nil
 	}
 	if d.containerVolumeMountVerifier != nil {
-		return d.containerVolumeMountVerifier(ctx, inspected, volumes)
+		return d.containerVolumeMountVerifier(ctx, inspected, volumes, sandboxID)
 	}
-	return d.verifyContainerVolumeMountDevices(ctx, inspected, volumes)
+	return d.verifyContainerVolumeMountDevices(ctx, inspected, volumes, sandboxID)
 }
 
 func (d *DockerClient) waitForContainerStopped(ctx context.Context, containerId string) error {

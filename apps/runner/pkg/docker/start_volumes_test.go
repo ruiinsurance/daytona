@@ -224,7 +224,7 @@ func TestStartStopsNewlyStartedContainerWhenVolumeTargetUsesWrongDevice(t *testi
 	var startCalls, killCalls, verifyCalls atomic.Int32
 	apiClient, running := newVolumeMountStateClient(t, sandboxID, false, &startCalls, &killCalls)
 	dockerClient := newStartTestDockerClient(apiClient)
-	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error {
 		verifyCalls.Add(1)
 		return errors.New("workspace device does not match S3 bind source")
 	}
@@ -258,7 +258,7 @@ func TestStartStopsAlreadyRunningContainerWhenVolumeTargetUsesWrongDevice(t *tes
 	var startCalls, killCalls, verifyCalls atomic.Int32
 	apiClient, running := newVolumeMountStateClient(t, sandboxID, true, &startCalls, &killCalls)
 	dockerClient := newStartTestDockerClient(apiClient)
-	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error {
 		verifyCalls.Add(1)
 		return errors.New("workspace device does not match S3 bind source")
 	}
@@ -280,6 +280,35 @@ func TestStartStopsAlreadyRunningContainerWhenVolumeTargetUsesWrongDevice(t *tes
 	}
 	if running.Load() {
 		t.Fatal("sandbox remained running after unsafe volume mount detection")
+	}
+}
+
+func TestStartPassesLogicalSandboxIDToVolumeVerifier(t *testing.T) {
+	requireTestRunnerConfig(t)
+	installMountFailureCommands(t, 0)
+	prepareResponsiveVolumeMount(t)
+
+	const sandboxID = "44444444-4444-4444-8444-444444444444"
+	var startCalls, killCalls atomic.Int32
+	apiClient, _ := newVolumeMountStateClient(t, sandboxID, false, &startCalls, &killCalls)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.containerVolumeMountVerifier = func(
+		_ context.Context,
+		_ *container.InspectResponse,
+		_ []dto.VolumeDTO,
+		verifiedSandboxID string,
+	) error {
+		if verifiedSandboxID != sandboxID {
+			t.Fatalf("verified sandbox ID = %q, want logical sandbox ID %q", verifiedSandboxID, sandboxID)
+		}
+		return errors.New("stop after identity assertion")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err := dockerClient.Start(ctx, sandboxID, nil, volumeTestMetadata(sandboxID))
+	if err == nil || !strings.Contains(err.Error(), "container volume mount verification failed") {
+		t.Fatalf("Start() error = %v, want a volume verification error", err)
 	}
 }
 

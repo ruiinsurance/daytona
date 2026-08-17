@@ -18,7 +18,71 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 )
 
-type containerVolumeMountVerifier func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error
+type containerVolumeMountVerifier func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error
+
+// StartLocalFirstWorkspace starts or verifies a sandbox container only after
+// both explicit local-first bind rows have been resolved and verified. It is
+// intentionally narrower than Start: it proves the container/mount boundary
+// without waiting on the sandbox daemon, whose auth/readiness belongs to the
+// control-plane start workflow.
+func (d *DockerClient) StartLocalFirstWorkspace(
+	ctx context.Context,
+	containerID string,
+	volumeID string,
+	sandboxID string,
+	nodeID string,
+	fenceEpoch string,
+	leaseOwner string,
+	leaseExpiresAt string,
+) error {
+	subpath := "sandboxes/" + sandboxID + "/workspace"
+	volumes := []dto.VolumeDTO{
+		{
+			VolumeId:       volumeID,
+			MountPath:      "/workspace",
+			Subpath:        &subpath,
+			Backend:        "local-first",
+			NodeId:         nodeID,
+			FenceEpoch:     fenceEpoch,
+			LeaseOwner:     leaseOwner,
+			LeaseExpiresAt: leaseExpiresAt,
+		},
+		{
+			VolumeId:       volumeID,
+			MountPath:      "/config",
+			Subpath:        &subpath,
+			Backend:        "local-first",
+			NodeId:         nodeID,
+			FenceEpoch:     fenceEpoch,
+			LeaseOwner:     leaseOwner,
+			LeaseExpiresAt: leaseExpiresAt,
+		},
+	}
+	inspected, err := d.ContainerInspect(ctx, containerID)
+	if err != nil || inspected == nil || inspected.State == nil {
+		return fmt.Errorf("storage_agent_start_failed")
+	}
+	if _, err := d.getVolumesMountPathBinds(ctx, volumes, containerID); err != nil {
+		return fmt.Errorf("storage_agent_start_failed")
+	}
+	if inspected.State.Running {
+		if err := d.verifyContainerVolumeMounts(ctx, inspected, volumes, containerID); err != nil {
+			return d.failClosedContainerVolumeMount(ctx, inspected, err)
+		}
+		return nil
+	}
+	if err := d.apiClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("storage_agent_start_failed")
+	}
+	running, err := d.waitForContainerRunning(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("storage_agent_start_failed")
+	}
+	if err := d.verifyContainerVolumeMounts(ctx, running, volumes, containerID); err != nil {
+		return d.failClosedContainerVolumeMount(ctx, running, err)
+	}
+	return nil
+}
 
 func (d *DockerClient) Start(ctx context.Context, containerId string, authToken *string, metadata map[string]string) (*container.InspectResponse, string, error) {
 	defer timer.Timer()()
@@ -41,7 +105,7 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 			return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
 		}
 		if len(volumes) > 0 {
-			if _, err = d.getVolumesMountPathBinds(ctx, volumes); err != nil {
+			if _, err = d.getVolumesMountPathBinds(ctx, volumes, containerId); err != nil {
 				volumeErr := fmt.Errorf("failed to ensure volume FUSE mounts: %w", err)
 				return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
 			}
@@ -49,7 +113,7 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	}
 
 	if c.State.Running {
-		if err := d.verifyContainerVolumeMounts(ctx, c, volumes); err != nil {
+		if err := d.verifyContainerVolumeMounts(ctx, c, volumes, containerId); err != nil {
 			return nil, "", d.failClosedContainerVolumeMount(ctx, c, err)
 		}
 
@@ -83,7 +147,7 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	if err != nil {
 		return nil, "", err
 	}
-	if err := d.verifyContainerVolumeMounts(ctx, runningContainer, volumes); err != nil {
+	if err := d.verifyContainerVolumeMounts(ctx, runningContainer, volumes, containerId); err != nil {
 		return nil, "", d.failClosedContainerVolumeMount(ctx, runningContainer, err)
 	}
 

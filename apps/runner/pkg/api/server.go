@@ -150,6 +150,17 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.Any("/:sandboxId/toolbox/*path", controllers.ProxyRequest(sandboxControllerLogger))
 	}
 
+	storageWorkspaceController := protected.Group("/storage/workspaces")
+	{
+		storageWorkspaceController.POST("/checkpoint", controllers.CheckpointWorkspace)
+		storageWorkspaceController.POST("/export", controllers.ExportWorkspaceCheckpoint)
+		storageWorkspaceController.POST("/import", controllers.ImportWorkspaceCheckpoint)
+		storageWorkspaceController.POST("/verify", controllers.VerifyWorkspaceCheckpoint)
+		storageWorkspaceController.POST("/quiesce", controllers.QuiesceWorkspace)
+		storageWorkspaceController.POST("/start", controllers.StartWorkspace)
+		storageWorkspaceController.POST("/retain", controllers.RetainWorkspaceSource)
+	}
+
 	snapshotControllerLogger := a.logger.With(slog.String("component", "snapshot_controller"))
 	snapshotController := protected.Group("/snapshots")
 	{

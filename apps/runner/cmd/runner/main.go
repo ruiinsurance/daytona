@@ -27,6 +27,7 @@ import (
 	"github.com/daytonaio/runner/pkg/runner/v2/poller"
 	"github.com/daytonaio/runner/pkg/services"
 	"github.com/daytonaio/runner/pkg/sshgateway"
+	"github.com/daytonaio/runner/pkg/storageagent"
 	"github.com/daytonaio/runner/pkg/telemetry/filters"
 	"github.com/docker/docker/client"
 	"github.com/lmittmann/tint"
@@ -152,6 +153,9 @@ func run() int {
 		AWSDefaultBucket:             cfg.AWSDefaultBucket,
 		AWSVolumeLayout:              cfg.AWSVolumeLayout,
 		AWSVolumePrefix:              cfg.AWSVolumePrefix,
+		LocalFirstStorageEnabled:     cfg.LocalFirstStorageEnabled,
+		LocalStorageRoot:             cfg.LocalStorageRoot,
+		StorageNodeId:                cfg.StorageNodeId,
 		DaemonPath:                   daemonPath,
 		ComputerUsePluginPath:        pluginPath,
 		NetRulesManager:              netRulesManager,
@@ -176,6 +180,18 @@ func run() int {
 	if err != nil {
 		logger.Error("Error creating Docker client wrapper", "error", err)
 		return 2
+	}
+
+	var storageAgent *storageagent.Agent
+	if cfg.LocalFirstStorageEnabled {
+		storageAgent, err = storageagent.New(storageagent.Config{
+			Root:   cfg.LocalStorageRoot,
+			NodeID: cfg.StorageNodeId,
+		})
+		if err != nil {
+			logger.Error("Failed to initialize local-first storage agent", "error", storageagent.Code(err))
+			return 2
+		}
 	}
 
 	// Start Docker events monitor
@@ -239,6 +255,7 @@ func run() int {
 		MetricsCollector:   metricsCollector,
 		NetRulesManager:    netRulesManager,
 		SSHGatewayService:  sshGatewayService,
+		StorageAgent:       storageAgent,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)
@@ -247,15 +264,18 @@ func run() int {
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
-			Interval:   cfg.HealthcheckInterval,
-			Timeout:    cfg.HealthcheckTimeout,
-			Collector:  metricsCollector,
-			Logger:     logger,
-			Domain:     cfg.Domain,
-			ApiPort:    cfg.ApiPort,
-			ProxyPort:  cfg.ApiPort,
-			TlsEnabled: cfg.EnableTLS,
-			Docker:     dockerClient,
+			Interval:                 cfg.HealthcheckInterval,
+			Timeout:                  cfg.HealthcheckTimeout,
+			Collector:                metricsCollector,
+			Logger:                   logger,
+			Domain:                   cfg.Domain,
+			ApiPort:                  cfg.ApiPort,
+			ProxyPort:                cfg.ApiPort,
+			TlsEnabled:               cfg.EnableTLS,
+			Docker:                   dockerClient,
+			LocalFirstStorageEnabled: cfg.LocalFirstStorageEnabled,
+			StorageNodeID:            cfg.StorageNodeId,
+			LocalStorageRoot:         cfg.LocalStorageRoot,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)

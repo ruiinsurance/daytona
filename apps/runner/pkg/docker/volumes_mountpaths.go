@@ -74,13 +74,35 @@ func resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSourc
 	return baseMountPath, bindSource, nil
 }
 
-func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
+func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO, sandboxID string) ([]string, error) {
+	hasLocalFirst := false
+	for _, volume := range volumes {
+		switch volume.Backend {
+		case "":
+		case localFirstBackend:
+			hasLocalFirst = true
+		case "legacy-cos":
+		default:
+			return nil, fmt.Errorf("unsupported volume backend %q", volume.Backend)
+		}
+	}
+	if hasLocalFirst && (!d.localFirstStorageEnabled || !isCanonicalUUID(d.storageNodeId)) {
+		return nil, fmt.Errorf("local-first storage is not enabled or Runner node identity is missing")
+	}
+	localSources, err := resolveLocalFirstMountSources(volumes, d.localStorageRoot, d.storageNodeId, sandboxID, time.Now())
+	if err != nil {
+		return nil, err
+	}
+
 	// Phase 1: fan out FUSE mounts for unique volumes in parallel. Each
 	// ensureVolumeFuseMounted runs mount-s3 and then waits up to 5s for the
 	// mount to become ready; doing them sequentially made create-time scale
 	// linearly with the number of mounted volumes.
 	uniqueMounts := make(map[string]string, len(volumes)) // volumeIdPrefixed -> baseMountPath
-	for _, vol := range volumes {
+	for index, vol := range volumes {
+		if _, local := localSources[index]; local {
+			continue
+		}
 		baseMountPath, _, err := resolveVolumeMountPaths(vol)
 		if err != nil {
 			return nil, err
@@ -121,17 +143,20 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 	// Phase 2: build bind strings in input order. Subpath mkdir is cheap and
 	// kept sequential so the returned slice order matches volumes.
 	volumeMountPathBinds := make([]string, 0, len(volumes))
-	for _, vol := range volumes {
-		_, bindSource, err := resolveVolumeMountPaths(vol)
-		if err != nil {
-			return nil, err
+	for index, vol := range volumes {
+		bindSource, local := localSources[index]
+		if !local {
+			_, bindSource, err = resolveVolumeMountPaths(vol)
+			if err != nil {
+				return nil, err
+			}
 		}
 		subpathStr := ""
 		if vol.Subpath != nil {
 			subpathStr = *vol.Subpath
 		}
 
-		if vol.Subpath != nil && *vol.Subpath != "" {
+		if !local && vol.Subpath != nil && *vol.Subpath != "" {
 			err := os.MkdirAll(bindSource, 0755)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)

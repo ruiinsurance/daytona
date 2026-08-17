@@ -19,29 +19,36 @@ import (
 )
 
 type HealthcheckServiceConfig struct {
-	Interval   time.Duration
-	Timeout    time.Duration
-	Collector  *metrics.Collector
-	Logger     *slog.Logger
-	Domain     string
-	ApiPort    int
-	ProxyPort  int
-	TlsEnabled bool
-	Docker     *docker.DockerClient
+	Interval                 time.Duration
+	Timeout                  time.Duration
+	Collector                *metrics.Collector
+	Logger                   *slog.Logger
+	Domain                   string
+	ApiPort                  int
+	ProxyPort                int
+	TlsEnabled               bool
+	Docker                   *docker.DockerClient
+	LocalFirstStorageEnabled bool
+	StorageNodeID            string
+	LocalStorageRoot         string
 }
 
 // Service handles healthcheck reporting to the API
 type Service struct {
-	log        *slog.Logger
-	interval   time.Duration
-	timeout    time.Duration
-	collector  *metrics.Collector
-	client     *apiclient.APIClient
-	domain     string
-	apiPort    int
-	proxyPort  int
-	tlsEnabled bool
-	docker     *docker.DockerClient
+	log                      *slog.Logger
+	interval                 time.Duration
+	timeout                  time.Duration
+	collector                *metrics.Collector
+	client                   *apiclient.APIClient
+	domain                   string
+	apiPort                  int
+	proxyPort                int
+	tlsEnabled               bool
+	docker                   *docker.DockerClient
+	localFirstStorageEnabled bool
+	storageNodeID            string
+	localStorageRoot         string
+	storageNodes             *storageNodeClient
 }
 
 // NewService creates a new healthcheck service
@@ -54,24 +61,37 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 	if cfg.Docker == nil {
 		return nil, fmt.Errorf("docker client is required for healthcheck service")
 	}
+	if cfg.LocalFirstStorageEnabled && cfg.StorageNodeID == "" {
+		return nil, fmt.Errorf("storage node identity is required for local-first healthcheck")
+	}
 
 	logger := slog.Default()
 	if cfg.Logger != nil {
 		logger = cfg.Logger
 	}
 
-	return &Service{
-		log:        logger.With(slog.String("component", "healthcheck")),
-		client:     apiClient,
-		interval:   cfg.Interval,
-		timeout:    cfg.Timeout,
-		collector:  cfg.Collector,
-		domain:     cfg.Domain,
-		apiPort:    cfg.ApiPort,
-		proxyPort:  cfg.ProxyPort,
-		tlsEnabled: cfg.TlsEnabled,
-		docker:     cfg.Docker,
-	}, nil
+	service := &Service{
+		log:                      logger.With(slog.String("component", "healthcheck")),
+		client:                   apiClient,
+		interval:                 cfg.Interval,
+		timeout:                  cfg.Timeout,
+		collector:                cfg.Collector,
+		domain:                   cfg.Domain,
+		apiPort:                  cfg.ApiPort,
+		proxyPort:                cfg.ProxyPort,
+		tlsEnabled:               cfg.TlsEnabled,
+		docker:                   cfg.Docker,
+		localFirstStorageEnabled: cfg.LocalFirstStorageEnabled,
+		storageNodeID:            cfg.StorageNodeID,
+		localStorageRoot:         cfg.LocalStorageRoot,
+	}
+	if cfg.LocalFirstStorageEnabled {
+		service.storageNodes, err = newStorageNodeClient(apiClient)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return service, nil
 }
 
 // Start begins the healthcheck loop
@@ -103,6 +123,18 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	// Create context with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	if s.localFirstStorageEnabled {
+		capacity, err := collectStorageNodeCapacity(reqCtx, s.localStorageRoot)
+		if err != nil {
+			return err
+		}
+		if err := s.storageNodes.register(reqCtx, s.storageNodeID, capacity); err != nil {
+			return err
+		}
+		if err := s.storageNodes.heartbeat(reqCtx, s.storageNodeID, capacity); err != nil {
+			return err
+		}
+	}
 
 	// Build healthcheck request
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)

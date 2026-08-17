@@ -16,6 +16,7 @@ import (
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/services"
 	"github.com/daytonaio/runner/pkg/sshgateway"
+	"github.com/daytonaio/runner/pkg/storageagent"
 )
 
 type RunnerInstanceConfig struct {
@@ -27,6 +28,7 @@ type RunnerInstanceConfig struct {
 	SandboxService     *services.SandboxService
 	NetRulesManager    *netrules.NetRulesManager
 	SSHGatewayService  *sshgateway.Service
+	StorageAgent       *storageagent.Agent
 }
 
 type Runner struct {
@@ -38,6 +40,7 @@ type Runner struct {
 	SandboxService     *services.SandboxService
 	NetRulesManager    *netrules.NetRulesManager
 	SSHGatewayService  *sshgateway.Service
+	StorageAgent       *storageagent.Agent
 }
 
 var runner *Runner
@@ -66,6 +69,7 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			MetricsCollector:   config.MetricsCollector,
 			NetRulesManager:    config.NetRulesManager,
 			SSHGatewayService:  config.SSHGatewayService,
+			StorageAgent:       config.StorageAgent,
 		}
 	}
 

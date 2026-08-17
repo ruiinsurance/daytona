@@ -79,6 +79,28 @@ func TestGetConfigRejectsIncompleteSingleBucketVolumeSettings(t *testing.T) {
 	}
 }
 
+func TestLoadStableStorageNodeIDPersistsAndRejectsIdentityDrift(t *testing.T) {
+	identityPath := t.TempDir() + "/storage-node-id"
+	configured := "11111111-1111-4111-8111-111111111111"
+	first, err := loadStableStorageNodeID(configured, identityPath)
+	if err != nil {
+		t.Fatalf("loadStableStorageNodeID() error = %v", err)
+	}
+	if first != configured {
+		t.Fatalf("first identity = %q, want %q", first, configured)
+	}
+	second, err := loadStableStorageNodeID("", identityPath)
+	if err != nil {
+		t.Fatalf("reload identity error = %v", err)
+	}
+	if second != configured {
+		t.Fatalf("reloaded identity = %q, want %q", second, configured)
+	}
+	if _, err := loadStableStorageNodeID("22222222-2222-4222-8222-222222222222", identityPath); err == nil {
+		t.Fatal("identity drift was accepted")
+	}
+}
+
 const (
 	perVolumeBucketLayout    = "per-volume-bucket"
 	singleBucketPrefixLayout = "single-bucket-prefix"
