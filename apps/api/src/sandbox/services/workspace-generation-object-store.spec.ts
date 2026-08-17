@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildWorkspaceGenerationKey } from '../local-first/workspace-generation.contract'
+import { buildWorkspaceGenerationKey, manifestHash } from '../local-first/workspace-generation.contract'
 import { S3GenerationObjectStore } from './workspace-generation.service'
 
 const VOLUME_ID = '11111111-1111-4111-8111-111111111111'
@@ -42,9 +42,65 @@ describe('S3GenerationObjectStore', () => {
     expect(send.mock.calls.every(([command]) => command.input.Body === undefined)).toBe(true)
   })
 
+  it('rejects a latest pointer whose committed marker does not match its generation', async () => {
+    const send = vi.fn().mockImplementation(async (command: { input: Record<string, unknown> }) => {
+      const key = String(command.input.Key)
+      if (key.endsWith('/latest')) {
+        return { Body: { transformToString: async () => JSON.stringify({ generation: '3' }) } }
+      }
+      if (key.endsWith('/3/_COMMITTED')) {
+        return {
+          Body: {
+            transformToString: async () => JSON.stringify({ generation: '2', manifestHash: '0'.repeat(64) }),
+          },
+        }
+      }
+      return {}
+    })
+    const store = new S3GenerationObjectStore({ send } as any, 'test-bucket', 'tenant/local-first')
+    const workspaceKey = buildWorkspaceGenerationKey(VOLUME_ID, SANDBOX_ID, 'tenant/local-first')
+
+    await expect(store.getLatest(workspaceKey)).rejects.toThrow('generation_latest_invalid')
+  })
+
+  it('accepts latest only when the marker and manifest hashes agree', async () => {
+    const manifest = {
+      formatVersion: 1 as const,
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      generation: '3',
+      objectCount: 0,
+      bytes: 0,
+      contentHash: '0'.repeat(64),
+      createdAt: '2026-08-17T00:00:00.000Z',
+    }
+    const send = vi.fn().mockImplementation(async (command: { input: Record<string, unknown> }) => {
+      const key = String(command.input.Key)
+      if (key.endsWith('/latest')) {
+        return { Body: { transformToString: async () => JSON.stringify({ generation: '3' }) } }
+      }
+      if (key.endsWith('/3/_COMMITTED')) {
+        return {
+          Body: {
+            transformToString: async () => JSON.stringify({ generation: '3', manifestHash: manifestHash(manifest) }),
+          },
+        }
+      }
+      if (key.endsWith('/3/manifest.json')) {
+        return { Body: { transformToString: async () => JSON.stringify(manifest) } }
+      }
+      throw notFound()
+    })
+    const store = new S3GenerationObjectStore({ send } as any, 'test-bucket', 'tenant/local-first')
+    const workspaceKey = buildWorkspaceGenerationKey(VOLUME_ID, SANDBOX_ID, 'tenant/local-first')
+
+    await expect(store.getLatest(workspaceKey)).resolves.toBe('3')
+  })
+
   it('rejects keys outside the configured prefix', async () => {
     const store = new S3GenerationObjectStore({ send: vi.fn() } as any, 'test-bucket', 'tenant/local-first')
-    await expect(store.getLatest(buildWorkspaceGenerationKey(VOLUME_ID, SANDBOX_ID, 'other')))
-      .rejects.toThrow('generation_prefix_mismatch')
+    await expect(store.getLatest(buildWorkspaceGenerationKey(VOLUME_ID, SANDBOX_ID, 'other'))).rejects.toThrow(
+      'generation_prefix_mismatch',
+    )
   })
 })

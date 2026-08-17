@@ -424,13 +424,29 @@ export class S3GenerationObjectStore implements GenerationObjectStore {
       const text = await response.Body?.transformToString()
       if (!text) return null
       const value = JSON.parse(text) as { generation?: unknown }
-      if (typeof value.generation !== 'string') return null
-      await this.client.send(
-        new HeadObjectCommand({
+      if (typeof value.generation !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value.generation)) {
+        throw new Error('generation_latest_invalid')
+      }
+      const markerResponse = await this.client.send(
+        new GetObjectCommand({
           Bucket: this.bucket,
           Key: this.generationKey(workspaceKey, value.generation, GENERATION_COMMIT_MARKER),
         }),
       )
+      const markerText = await markerResponse.Body?.transformToString()
+      if (!markerText) throw new Error('generation_latest_invalid')
+      const marker = JSON.parse(markerText) as { generation?: unknown; manifestHash?: unknown }
+      if (
+        marker.generation !== value.generation ||
+        typeof marker.manifestHash !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(marker.manifestHash)
+      ) {
+        throw new Error('generation_latest_invalid')
+      }
+      const manifest = await this.readManifest(workspaceKey, value.generation)
+      if (manifest.generation !== value.generation || manifestHash(manifest) !== marker.manifestHash) {
+        throw new Error('generation_latest_invalid')
+      }
       return value.generation
     } catch (error) {
       if (isNotFound(error)) return null
