@@ -184,6 +184,70 @@ describe('WorkspacePlacementService', () => {
     ).rejects.toThrow('workspace_lease_conflict')
   })
 
+  it('allows only one concurrent RW writer lease for a placement', async () => {
+    let current = placement()
+    let executions = 0
+    let releaseBarrier!: () => void
+    const bothQueriesReady = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    const repository = {
+      createQueryBuilder: vi.fn(() => {
+        const params: Record<string, unknown> = {}
+        const query = {
+          update: vi.fn().mockReturnThis(),
+          set: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn((_condition: string, values?: Record<string, unknown>) => {
+            Object.assign(params, values)
+            return query
+          }),
+          returning: vi.fn().mockReturnThis(),
+          execute: vi.fn(async () => {
+            executions += 1
+            if (executions === 2) releaseBarrier()
+            await bothQueriesReady
+
+            if (current.leaseOwner !== null) return { raw: [], affected: 0 }
+            current = {
+              ...current,
+              leaseOwner: params.leaseOwner as string,
+              leaseExpiresAt: new Date(NOW.getTime() + 30_000),
+            }
+            return { raw: [current], affected: 1 }
+          }),
+        }
+        return query
+      }),
+    } as any
+    const service = new WorkspacePlacementService(repository, {} as any)
+
+    const results = await Promise.allSettled([
+      service.acquireWriterLease({
+        placementId: PLACEMENT_ID,
+        nodeId: RUNNER_A,
+        fenceEpoch: 3,
+        leaseOwner: 'runner-a-process',
+        now: NOW,
+      }),
+      service.acquireWriterLease({
+        placementId: PLACEMENT_ID,
+        nodeId: RUNNER_A,
+        fenceEpoch: 3,
+        leaseOwner: 'runner-b-process',
+        now: NOW,
+      }),
+    ])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(
+      results.some((result) => result.status === 'rejected' && result.reason?.message === 'workspace_lease_conflict'),
+    ).toBe(true)
+    expect(current.leaseOwner).toMatch(/^runner-[ab]-process$/)
+    expect(current.leaseExpiresAt).toEqual(new Date(NOW.getTime() + 30_000))
+    expect(executions).toBe(2)
+  })
+
   it('requires a verified target before the owner CAS and increments the fence once', async () => {
     const { repository, query } = queryRepository([placement({ ownerNodeId: RUNNER_B, fenceEpoch: '4' })])
     const service = new WorkspacePlacementService(repository, {} as any)
@@ -249,6 +313,69 @@ describe('WorkspacePlacementService', () => {
         now: NOW,
       }),
     ).rejects.toThrow('workspace_owner_cas_miss')
+  })
+
+  it('allows only one concurrent verified owner CAS to advance the fence', async () => {
+    let current = placement()
+    let executions = 0
+    let releaseBarrier!: () => void
+    const bothQueriesReady = new Promise<void>((resolve) => {
+      releaseBarrier = resolve
+    })
+    const repository = {
+      createQueryBuilder: vi.fn(() => {
+        const query = {
+          update: vi.fn().mockReturnThis(),
+          set: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          andWhere: vi.fn().mockReturnThis(),
+          returning: vi.fn().mockReturnThis(),
+          execute: vi.fn(async () => {
+            executions += 1
+            if (executions === 2) releaseBarrier()
+            await bothQueriesReady
+
+            if (current.ownerNodeId !== RUNNER_A || current.fenceEpoch !== '3') {
+              return { raw: [], affected: 0 }
+            }
+
+            current = {
+              ...current,
+              ownerNodeId: RUNNER_B,
+              fenceEpoch: '4',
+              localGeneration: '4',
+              dirty: true,
+              leaseOwner: null,
+              leaseExpiresAt: null,
+            }
+            return { raw: [current], affected: 1 }
+          }),
+        }
+        return query
+      }),
+    } as any
+    const service = new WorkspacePlacementService(repository, {} as any)
+    const input = {
+      placementId: PLACEMENT_ID,
+      expectedOwnerNodeId: RUNNER_A,
+      expectedFenceEpoch: 3,
+      expectedLocalGeneration: '3',
+      operationId: OPERATION_ID,
+      operationLeaseOwner: 'move-worker:test',
+      targetNodeId: RUNNER_B,
+      targetGeneration: '4',
+      targetVerified: true,
+      now: NOW,
+    }
+
+    const results = await Promise.allSettled([service.switchOwner(input), service.switchOwner(input)])
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(
+      results.some((result) => result.status === 'rejected' && result.reason?.message === 'workspace_owner_cas_miss'),
+    ).toBe(true)
+    expect(current).toMatchObject({ ownerNodeId: RUNNER_B, fenceEpoch: '4', localGeneration: '4' })
+    expect(executions).toBe(2)
   })
 
   it('advances local generation in the same verified owner CAS', async () => {
