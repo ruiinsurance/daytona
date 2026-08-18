@@ -219,6 +219,61 @@ describe('WorkspaceGenerationService', () => {
     expect(current.dirty).toBe(true)
   })
 
+  it('reconciles an object-store outage after checkpointing without changing operation identity', async () => {
+    const { service, current, generationRows, generationRepository, placementRepository, workspacePlacementService } =
+      setup()
+    const snapshot = checkpoint()
+    let outage = true
+    const source = { create: vi.fn(async () => snapshot) }
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(async () => {
+        if (outage) {
+          outage = false
+          throw new Error('object_store_unavailable')
+        }
+      }),
+      readManifest: vi.fn(async () => snapshot.manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(async () => null),
+      compareAndSetLatest: vi.fn(async () => true),
+    }
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source,
+        store,
+        now: new Date('2026-08-17T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow('generation_upload_failed')
+
+    const operationId = generationRows[0].operationId
+    expect(generationRows[0]).toMatchObject({ state: WorkspaceGenerationState.FAILED, operationId })
+    expect(current).toMatchObject({ cosGeneration: '0', dirty: true, replicationStatus: 'failed' })
+    expect(store.putCommittedMarker).not.toHaveBeenCalled()
+    expect(store.compareAndSetLatest).not.toHaveBeenCalled()
+
+    const replacementService = new WorkspaceGenerationService(
+      generationRepository as any,
+      placementRepository as any,
+      workspacePlacementService as any,
+    )
+    await expect(
+      replacementService.reconcile({
+        placementId: PLACEMENT_ID,
+        source,
+        store,
+        now: new Date('2026-08-17T00:01:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ outcome: 'committed' })
+
+    expect(source.create).toHaveBeenLastCalledWith(expect.objectContaining({ operationId }))
+    expect(store.putCommittedMarker).toHaveBeenCalledOnce()
+    expect(store.compareAndSetLatest).toHaveBeenCalledOnce()
+    expect(current).toMatchObject({ cosGeneration: '1', dirty: false, replicationStatus: 'durable' })
+  })
+
   it('retains the checkpoint operation id across a source crash and retry', async () => {
     const { service, generationRows } = setup()
     let fail = true
