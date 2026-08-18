@@ -157,6 +157,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		storageWorkspaceController.POST("/import", controllers.ImportWorkspaceCheckpoint)
 		storageWorkspaceController.POST("/verify", controllers.VerifyWorkspaceCheckpoint)
 		storageWorkspaceController.POST("/quiesce", controllers.QuiesceWorkspace)
+		storageWorkspaceController.POST("/fence", controllers.FenceWorkspace)
 		storageWorkspaceController.POST("/start", controllers.StartWorkspace)
 		storageWorkspaceController.POST("/retain", controllers.RetainWorkspaceSource)
 	}

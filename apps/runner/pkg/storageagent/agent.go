@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +120,16 @@ type RetainRequest struct {
 }
 
 type QuiesceRequest struct {
+	OperationID    string `json:"operationId"`
+	VolumeID       string `json:"volumeId"`
+	SandboxID      string `json:"sandboxId"`
+	NodeID         string `json:"nodeId"`
+	FenceEpoch     string `json:"fenceEpoch"`
+	LeaseOwner     string `json:"leaseOwner"`
+	LeaseExpiresAt string `json:"leaseExpiresAt"`
+}
+
+type FenceRequest struct {
 	OperationID    string `json:"operationId"`
 	VolumeID       string `json:"volumeId"`
 	SandboxID      string `json:"sandboxId"`
@@ -391,10 +402,20 @@ func (a *Agent) Start(ctx context.Context, request StartRequest) error {
 	if err := a.validateRequest(ctx, request.OperationID, request.VolumeID, request.SandboxID, request.NodeID, request.FenceEpoch, request.LeaseOwner, request.LeaseExpiresAt); err != nil {
 		return err
 	}
+	if err := AssertWorkspaceStartAllowed(a.root, request.VolumeID, request.SandboxID, request.FenceEpoch); err != nil {
+		return newError(err.Error(), true)
+	}
 	if _, err := a.workspacePath(request.VolumeID, request.SandboxID, request.NodeID, false); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (a *Agent) Fence(ctx context.Context, request FenceRequest) error {
+	if _, err := a.workspacePath(request.VolumeID, request.SandboxID, request.NodeID, false); err != nil {
+		return err
+	}
+	return a.validateRequest(ctx, request.OperationID, request.VolumeID, request.SandboxID, request.NodeID, request.FenceEpoch, request.LeaseOwner, request.LeaseExpiresAt)
 }
 
 func (a *Agent) Retain(ctx context.Context, request RetainRequest) (RetainResponse, error) {
@@ -440,7 +461,123 @@ func (a *Agent) validateRequest(ctx context.Context, operationID, volumeID, sand
 	if err != nil || !parsed.After(time.Now()) {
 		return newError("workspace_lease_expired", true)
 	}
+	if err := ObserveWorkspaceFence(a.root, volumeID, sandboxID, fenceEpoch); err != nil {
+		return newError(err.Error(), true)
+	}
 	return nil
+}
+
+type fenceState struct {
+	FenceEpoch string `json:"fenceEpoch"`
+}
+
+// ObserveWorkspaceFence persists the highest fence epoch accepted by this
+// Runner. It is shared by the storage agent and Docker start path so queued
+// jobs cannot bypass a fence check by skipping the storage-agent endpoint.
+func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
+	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || !isCanonicalUUID(volumeID) || !isCanonicalUUID(sandboxID) {
+		return errors.New("workspace_fence_invalid")
+	}
+	incoming, err := parseFenceEpoch(fenceEpoch)
+	if err != nil {
+		return err
+	}
+
+	lockPath := filepath.Join(root, "fences", volumeID, sandboxID+".lock")
+	statePath := filepath.Join(root, "fences", volumeID, sandboxID+".json")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
+		return errors.New("workspace_fence_state_unavailable")
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return errors.New("workspace_fence_state_unavailable")
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return errors.New("workspace_fence_state_unavailable")
+	}
+	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+
+	current := uint64(0)
+	stateBody, readErr := os.ReadFile(statePath)
+	if readErr == nil {
+		var state fenceState
+		if json.Unmarshal(stateBody, &state) != nil {
+			return errors.New("workspace_fence_state_invalid")
+		}
+		current, err = parseFenceEpoch(state.FenceEpoch)
+		if err != nil {
+			return errors.New("workspace_fence_state_invalid")
+		}
+	} else if !os.IsNotExist(readErr) {
+		return errors.New("workspace_fence_state_unavailable")
+	}
+	if readErr == nil && incoming < current {
+		return errors.New("stale_workspace_fence")
+	}
+	if readErr == nil && incoming == current {
+		return nil
+	}
+	if err := writeFenceState(statePath, fenceState{FenceEpoch: fenceEpoch}); err != nil {
+		return errors.New("workspace_fence_state_unavailable")
+	}
+	return nil
+}
+
+// AssertWorkspaceStartAllowed applies the local fence and quiesce barriers
+// used by both the storage-agent endpoint and ordinary Runner job starts.
+func AssertWorkspaceStartAllowed(root, volumeID, sandboxID, fenceEpoch string) error {
+	if err := ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(root, "locks", volumeID, sandboxID+".lock")
+	if _, err := os.Stat(lockPath); err == nil {
+		return errors.New("workspace_quiesce_conflict")
+	} else if !os.IsNotExist(err) {
+		return errors.New("workspace_lock_unavailable")
+	}
+	return nil
+}
+
+func parseFenceEpoch(value string) (uint64, error) {
+	if !isDecimal(value) {
+		return 0, errors.New("workspace_fence_invalid")
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || parsed > (1<<53)-1 || strconv.FormatUint(parsed, 10) != value {
+		return 0, errors.New("workspace_fence_invalid")
+	}
+	return parsed, nil
+}
+
+func writeFenceState(path string, state fenceState) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".fence-state-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	body, err := json.Marshal(state)
+	if err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(append(body, '\n')); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
 }
 
 func (a *Agent) workspacePath(volumeID, sandboxID, nodeID string, createParent bool) (string, error) {

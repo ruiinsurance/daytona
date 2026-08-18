@@ -163,6 +163,93 @@ func TestRejectsSymlinkAndStaleLease(t *testing.T) {
 	}
 }
 
+func TestFenceRejectsStaleWriterAfterOwnerSwitch(t *testing.T) {
+	root := t.TempDir()
+	defer makeTreeWritable(root)
+	agent, err := New(Config{Root: root, NodeID: testNodeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "nodes", testNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+	if err := os.MkdirAll(workspace, 0o770); err != nil {
+		t.Fatal(err)
+	}
+
+	initial := checkpointRequest("1")
+	initial.FenceEpoch = "1"
+	if _, err := agent.Checkpoint(context.Background(), initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Fence(context.Background(), FenceRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "2",
+		LeaseOwner:     "move-worker:" + testOperation,
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := New(Config{Root: root, NodeID: testNodeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale := StartRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "1",
+		LeaseOwner:     "runner:stale",
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	if err := replacement.Start(context.Background(), stale); Code(err) != "stale_workspace_fence" {
+		t.Fatalf("stale start error = %q, want stale_workspace_fence", Code(err))
+	}
+
+	stale.FenceEpoch = "2"
+	if err := replacement.Start(context.Background(), stale); err != nil {
+		t.Fatalf("current fence start failed: %v", err)
+	}
+}
+
+func TestNormalStartRejectsQuiesceBarrier(t *testing.T) {
+	root := t.TempDir()
+	agent, err := New(Config{Root: root, NodeID: testNodeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "nodes", testNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+	if err := os.MkdirAll(workspace, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	request := QuiesceRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "1",
+		LeaseOwner:     "move-worker:" + testOperation,
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	if err := agent.Quiesce(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Start(context.Background(), StartRequest{
+		OperationID:    request.OperationID,
+		VolumeID:       request.VolumeID,
+		SandboxID:      request.SandboxID,
+		NodeID:         request.NodeID,
+		FenceEpoch:     request.FenceEpoch,
+		LeaseOwner:     "runner:queued",
+		LeaseExpiresAt: request.LeaseExpiresAt,
+	}); Code(err) != "workspace_quiesce_conflict" {
+		t.Fatalf("quiesced start error = %q, want workspace_quiesce_conflict", Code(err))
+	}
+}
+
 func checkpointRequest(generation string) CheckpointRequest {
 	return CheckpointRequest{
 		OperationID:    testOperation,

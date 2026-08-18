@@ -104,6 +104,27 @@ func TestLocalFirstMountsRejectMissingConfigAliasAndStaleLease(t *testing.T) {
 	}
 }
 
+func TestLocalFirstMountsRejectPersistedStaleFence(t *testing.T) {
+	root := t.TempDir()
+	client := &DockerClient{
+		logger:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		localFirstStorageEnabled: true,
+		localStorageRoot:         root,
+		storageNodeId:            localTestNodeID,
+	}
+
+	if _, err := client.getVolumesMountPathBinds(context.Background(), localTestVolumes(time.Now().Add(time.Minute)), localTestSandboxID); err != nil {
+		t.Fatalf("initial local-first mount setup failed: %v", err)
+	}
+	stale := localTestVolumes(time.Now().Add(time.Minute))
+	for index := range stale {
+		stale[index].FenceEpoch = "6"
+	}
+	if _, err := client.getVolumesMountPathBinds(context.Background(), stale, localTestSandboxID); err == nil || !strings.Contains(err.Error(), "stale workspace fence") {
+		t.Fatalf("stale fence error = %v, want stale workspace fence", err)
+	}
+}
+
 func TestLocalFirstMountsRejectSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()

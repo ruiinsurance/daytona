@@ -105,6 +105,24 @@ func QuiesceWorkspace(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"quiesced": true})
 }
 
+func FenceWorkspace(ctx *gin.Context) {
+	var request storageagent.FenceRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil {
+		writeStorageAgentError(ctx, "storage_agent_request_invalid", false)
+		return
+	}
+	r, err := runner.GetInstance(nil)
+	if err != nil || r.StorageAgent == nil {
+		writeStorageAgentError(ctx, "storage_agent_disabled", false)
+		return
+	}
+	if err := r.StorageAgent.Fence(ctx.Request.Context(), request); err != nil {
+		writeStorageAgentError(ctx, storageagent.Code(err), storageagent.IsConflict(err))
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"fenced": true})
+}
+
 func StartWorkspace(ctx *gin.Context) {
 	var request storageagent.StartRequest
 	if err := ctx.ShouldBindJSON(&request); err != nil {

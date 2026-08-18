@@ -264,6 +264,7 @@ describe('RunnerStorageAgentMoveRuntime', () => {
   it('runs quiesce, checkpoint, copy, target verification, fenced start, and retention', async () => {
     const checkpoint = fixtureCheckpoint()
     const agentClient = {
+      fence: vi.fn().mockResolvedValue(undefined),
       quiesce: vi.fn().mockResolvedValue(undefined),
       checkpoint: vi.fn().mockResolvedValue(checkpoint),
       import: vi.fn().mockResolvedValue(undefined),
@@ -298,6 +299,12 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     await runtime.retainSource({ ...input, checkpointGeneration: '7' })
 
     expect(agentClient.quiesce).toHaveBeenCalled()
+    expect(agentClient.fence).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: operation.sourceNodeId,
+        lease: expect.objectContaining({ fenceEpoch: '5' }),
+      }),
+    )
     expect(agentClient.import).toHaveBeenCalledWith(expect.objectContaining({ nodeId: operation.targetNodeId }))
     expect(placementService.acquireWriterLease).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -307,5 +314,10 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     )
     expect(agentClient.start).toHaveBeenCalled()
     expect(agentClient.retain).toHaveBeenCalled()
+    expect(agentClient.retain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lease: expect.objectContaining({ fenceEpoch: '5' }),
+      }),
+    )
   })
 })

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,8 @@ func TestStorageAgentHTTPContract(t *testing.T) {
 	protected.POST("/storage/workspaces/export", controllers.ExportWorkspaceCheckpoint)
 	protected.POST("/storage/workspaces/verify", controllers.VerifyWorkspaceCheckpoint)
 	protected.POST("/storage/workspaces/quiesce", controllers.QuiesceWorkspace)
+	protected.POST("/storage/workspaces/fence", controllers.FenceWorkspace)
+	protected.POST("/storage/workspaces/start", controllers.StartWorkspace)
 	protected.POST("/storage/workspaces/retain", controllers.RetainWorkspaceSource)
 
 	t.Run("rejects missing and invalid bearer credentials", func(t *testing.T) {
@@ -125,6 +128,18 @@ func TestStorageAgentHTTPContract(t *testing.T) {
 	retainResponse := postJSON(t, router, "/storage/workspaces/retain", retainBody)
 	if retainResponse.Code != http.StatusOK {
 		t.Fatalf("retain status = %d, body = %s", retainResponse.Code, retainResponse.Body.String())
+	}
+
+	fenceBody := cloneMap(baseRequest)
+	fenceBody["fenceEpoch"] = "8"
+	fenceResponse := postJSON(t, router, "/storage/workspaces/fence", fenceBody)
+	if fenceResponse.Code != http.StatusOK {
+		t.Fatalf("fence status = %d, body = %s", fenceResponse.Code, fenceResponse.Body.String())
+	}
+	staleStart := cloneMap(baseRequest)
+	startResponse := postJSON(t, router, "/storage/workspaces/start", staleStart)
+	if startResponse.Code != http.StatusConflict || !strings.Contains(startResponse.Body.String(), "stale_workspace_fence") {
+		t.Fatalf("stale start status/body = %d/%s", startResponse.Code, startResponse.Body.String())
 	}
 
 	malformed := httptest.NewRequest(http.MethodPost, "/storage/workspaces/checkpoint", bytes.NewBufferString("not-json"))

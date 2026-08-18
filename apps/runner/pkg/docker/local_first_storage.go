@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/daytonaio/runner/pkg/api/dto"
+	"github.com/daytonaio/runner/pkg/storageagent"
 	"github.com/google/uuid"
 )
 
@@ -59,6 +60,12 @@ func resolveLocalFirstVolumeSource(volume dto.VolumeDTO, root string, nodeID str
 	root, err = canonicalStorageRoot(root)
 	if err != nil {
 		return "", err
+	}
+	if err := storageagent.AssertWorkspaceStartAllowed(root, volume.VolumeId, sandboxID, volume.FenceEpoch); err != nil {
+		if err.Error() == "stale_workspace_fence" {
+			return "", fmt.Errorf("local-first stale workspace fence: %w", err)
+		}
+		return "", fmt.Errorf("local-first workspace start rejected: %w", err)
 	}
 	source := filepath.Join(root, "nodes", nodeID, "volumes", volume.VolumeId, "sandboxes", sandboxID, "workspace")
 	relative, err := filepath.Rel(root, source)

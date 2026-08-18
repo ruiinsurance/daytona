@@ -175,6 +175,18 @@ export class RunnerStorageAgentClient {
     })
   }
 
+  async fence(input: { nodeId: string; volumeId: string; sandboxId: string; lease: AgentLease }): Promise<void> {
+    await this.request(input.nodeId, '/storage/workspaces/fence', {
+      operationId: input.lease.operationId,
+      volumeId: input.volumeId,
+      sandboxId: input.sandboxId,
+      nodeId: input.nodeId,
+      fenceEpoch: input.lease.fenceEpoch,
+      leaseOwner: input.lease.leaseOwner,
+      leaseExpiresAt: input.lease.leaseExpiresAt,
+    })
+  }
+
   async start(input: { nodeId: string; volumeId: string; sandboxId: string; lease: AgentLease }): Promise<void> {
     await this.request(input.nodeId, '/storage/workspaces/start', {
       operationId: input.lease.operationId,
@@ -434,6 +446,12 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
   async startTarget(input: MoveRuntimeInput): Promise<void> {
     const fenceEpoch = Number(input.fenceEpoch)
     if (!Number.isSafeInteger(fenceEpoch) || fenceEpoch < 1) throw new Error('workspace_fence_invalid')
+    await this.client.fence({
+      nodeId: input.operation.sourceNodeId,
+      volumeId: input.operation.volumeId,
+      sandboxId: input.operation.sandboxId,
+      lease: this.lease(input, String(fenceEpoch)),
+    })
     const placement = await this.workspacePlacementService.acquireWriterLease({
       placementId: input.operation.placementId,
       nodeId: input.operation.targetNodeId,
@@ -456,7 +474,7 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
       volumeId: input.operation.volumeId,
       sandboxId: input.operation.sandboxId,
       generation: checkpoint.generation,
-      lease: this.lease(input, input.operation.expectedFenceEpoch),
+      lease: this.lease(input, input.fenceEpoch),
     })
     this.checkpoints.delete(input.operation.id)
   }
