@@ -215,6 +215,79 @@ func TestStartFailsClosedWhenPersistedVolumeMetadataIsMalformed(t *testing.T) {
 	}
 }
 
+func TestStartLocalFirstWorkspaceReturnsFixedMountPreparationCategory(t *testing.T) {
+	requireTestRunnerConfig(t)
+
+	const sandboxID = "55555555-5555-4555-8555-555555555555"
+	var startCalls atomic.Int32
+	dockerClient := newStartTestDockerClient(newStoppedContainerClient(t, sandboxID, &startCalls))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := dockerClient.StartLocalFirstWorkspace(
+		ctx,
+		sandboxID,
+		testVolumeID,
+		sandboxID,
+		localTestNodeID,
+		"1",
+		"runner:test",
+		time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	)
+	if err == nil || err.Error() != "storage_agent_mount_prepare_failed" {
+		t.Fatalf("StartLocalFirstWorkspace() error = %v, want fixed mount preparation category", err)
+	}
+	if got := startCalls.Load(); got != 0 {
+		t.Fatalf("ContainerStart calls = %d, want 0 before mount preparation succeeds", got)
+	}
+}
+
+func TestStartErrorCodeDoesNotExposeUnclassifiedError(t *testing.T) {
+	if got := StartErrorCode(errors.New("docker daemon path contains secret material")); got != "storage_agent_start_failed" {
+		t.Fatalf("StartErrorCode() = %q, want generic fixed category", got)
+	}
+}
+
+func TestStartLocalFirstWorkspaceReturnsFixedMountVerificationCategory(t *testing.T) {
+	requireTestRunnerConfig(t)
+
+	const sandboxID = "66666666-6666-4666-8666-666666666666"
+	var startCalls, killCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClient(t, sandboxID, false, &startCalls, &killCalls)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localFirstStorageEnabled = true
+	dockerClient.localStorageRoot = t.TempDir()
+	dockerClient.storageNodeId = localTestNodeID
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error {
+		return errors.New("workspace mount identity mismatch")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := dockerClient.StartLocalFirstWorkspace(
+		ctx,
+		sandboxID,
+		testVolumeID,
+		sandboxID,
+		localTestNodeID,
+		"1",
+		"runner:test",
+		time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	)
+	if err == nil || err.Error() != "storage_agent_mount_verification_failed" {
+		t.Fatalf("StartLocalFirstWorkspace() error = %v, want fixed mount verification category", err)
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("ContainerStart calls = %d, want 1 before mount verification", got)
+	}
+	if got := killCalls.Load(); got != 1 {
+		t.Fatalf("ContainerKill calls = %d, want 1 after mount verification failure", got)
+	}
+	if running.Load() {
+		t.Fatal("sandbox remained running after unsafe local-first mount detection")
+	}
+}
+
 func TestStartStopsNewlyStartedContainerWhenVolumeTargetUsesWrongDevice(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)

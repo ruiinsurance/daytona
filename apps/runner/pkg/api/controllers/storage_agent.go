@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/daytonaio/runner/pkg/docker"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/daytonaio/runner/pkg/storageagent"
 	"github.com/gin-gonic/gin"
@@ -152,7 +153,7 @@ func StartWorkspace(ctx *gin.Context) {
 		request.LeaseOwner,
 		request.LeaseExpiresAt,
 	); err != nil {
-		writeStorageAgentError(ctx, "storage_agent_start_failed", false)
+		writeStorageAgentError(ctx, docker.StartErrorCode(err), false)
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"started": true})

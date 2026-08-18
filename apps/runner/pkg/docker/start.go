@@ -20,6 +20,39 @@ import (
 
 type containerVolumeMountVerifier func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error
 
+const (
+	localFirstStartContainerInspectFailed   = "storage_agent_container_inspect_failed"
+	localFirstStartMountPrepareFailed       = "storage_agent_mount_prepare_failed"
+	localFirstStartContainerStartFailed     = "storage_agent_container_start_failed"
+	localFirstStartContainerReadinessFailed = "storage_agent_container_readiness_failed"
+	localFirstStartMountVerificationFailed  = "storage_agent_mount_verification_failed"
+)
+
+type localFirstStartError struct {
+	code  string
+	cause error
+}
+
+func (e *localFirstStartError) Error() string { return e.code }
+
+func (e *localFirstStartError) Unwrap() error { return e.cause }
+
+func newLocalFirstStartError(code string, cause error) error {
+	return &localFirstStartError{code: code, cause: cause}
+}
+
+// StartErrorCode returns a fixed, non-sensitive public category for a
+// local-first container start failure. The underlying error remains available
+// to internal callers through errors.Is/errors.As, but is never returned by
+// the Runner API.
+func StartErrorCode(err error) string {
+	var startErr *localFirstStartError
+	if errors.As(err, &startErr) && startErr.code != "" {
+		return startErr.code
+	}
+	return "storage_agent_start_failed"
+}
+
 // StartLocalFirstWorkspace starts or verifies a sandbox container only after
 // both explicit local-first bind rows have been resolved and verified. It is
 // intentionally narrower than Start: it proves the container/mount boundary
@@ -60,26 +93,26 @@ func (d *DockerClient) StartLocalFirstWorkspace(
 	}
 	inspected, err := d.ContainerInspect(ctx, containerID)
 	if err != nil || inspected == nil || inspected.State == nil {
-		return fmt.Errorf("storage_agent_start_failed")
+		return newLocalFirstStartError(localFirstStartContainerInspectFailed, err)
 	}
 	if _, err := d.getVolumesMountPathBinds(ctx, volumes, containerID); err != nil {
-		return fmt.Errorf("storage_agent_start_failed")
+		return newLocalFirstStartError(localFirstStartMountPrepareFailed, err)
 	}
 	if inspected.State.Running {
 		if err := d.verifyContainerVolumeMounts(ctx, inspected, volumes, containerID); err != nil {
-			return d.failClosedContainerVolumeMount(ctx, inspected, err)
+			return newLocalFirstStartError(localFirstStartMountVerificationFailed, d.failClosedContainerVolumeMount(ctx, inspected, err))
 		}
 		return nil
 	}
 	if err := d.apiClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("storage_agent_start_failed")
+		return newLocalFirstStartError(localFirstStartContainerStartFailed, err)
 	}
 	running, err := d.waitForContainerRunning(ctx, containerID)
 	if err != nil {
-		return fmt.Errorf("storage_agent_start_failed")
+		return newLocalFirstStartError(localFirstStartContainerReadinessFailed, err)
 	}
 	if err := d.verifyContainerVolumeMounts(ctx, running, volumes, containerID); err != nil {
-		return d.failClosedContainerVolumeMount(ctx, running, err)
+		return newLocalFirstStartError(localFirstStartMountVerificationFailed, d.failClosedContainerVolumeMount(ctx, running, err))
 	}
 	return nil
 }
