@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceGenerationService } from './workspace-generation.service'
+import { WorkspacePlacementService } from './workspace-placement.service'
 import { WorkspaceGenerationState } from '../enums/workspace-generation-state.enum'
 import { checkpointContentHash, chooseRecoverySource, manifestHash } from '../local-first/workspace-generation.contract'
 
@@ -272,6 +273,59 @@ describe('WorkspaceGenerationService', () => {
     expect(store.putCommittedMarker).toHaveBeenCalledOnce()
     expect(store.compareAndSetLatest).toHaveBeenCalledOnce()
     expect(current).toMatchObject({ cosGeneration: '1', dirty: false, replicationStatus: 'durable' })
+  })
+
+  it('keeps owner-local start allowed when COS fails after a local checkpoint', async () => {
+    const { service, current, generationRows, workspacePlacementService } = setup()
+    current.localGeneration = '8'
+    current.cosGeneration = '7'
+
+    const checkpointed = checkpoint()
+    checkpointed.generation = '9'
+    checkpointed.manifest = { ...checkpointed.manifest, generation: '9' }
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(async () => {
+        throw new Error('object_store_unavailable')
+      }),
+      readManifest: vi.fn(),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(),
+      compareAndSetLatest: vi.fn(),
+    }
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source: { create: vi.fn(async () => checkpointed) },
+        store,
+        now: new Date('2026-08-17T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow('generation_upload_failed')
+
+    expect(current).toMatchObject({
+      localGeneration: '8',
+      cosGeneration: '7',
+      dirty: true,
+      replicationStatus: 'failed',
+    })
+    expect(generationRows[0]).toMatchObject({ generation: '9', state: WorkspaceGenerationState.FAILED })
+
+    const startGate = new WorkspacePlacementService(
+      {} as any,
+      {
+        chooseNode: vi.fn().mockResolvedValue({ nodeId: current.ownerNodeId, reason: 'owner_affinity' }),
+      } as any,
+    )
+    const ownerNodeId = current.ownerNodeId
+    await expect(
+      startGate.assertStartAllowed({
+        placement: current as any,
+        nodeId: ownerNodeId,
+        now: new Date('2026-08-17T00:02:00.000Z'),
+      }),
+    ).resolves.toBeUndefined()
+    expect(workspacePlacementService.releaseWriterLease).toHaveBeenCalled()
   })
 
   it('retains the checkpoint operation id across a source crash and retry', async () => {
