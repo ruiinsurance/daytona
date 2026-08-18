@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  WorkspaceGenerationReconciler,
-  WorkspaceGenerationWorker,
-} from './workspace-generation-worker.service'
+import { WorkspaceGenerationReconciler, WorkspaceGenerationWorker } from './workspace-generation-worker.service'
 
 const PLACEMENT_A = '11111111-1111-4111-8111-111111111111'
 const PLACEMENT_B = '22222222-2222-4222-8222-222222222222'
@@ -18,13 +15,7 @@ function queryBuilder(rows: unknown[]) {
 
 describe('WorkspaceGenerationWorker', () => {
   it('does not touch the database when generation storage is not explicitly configured', async () => {
-    const reconciler = new WorkspaceGenerationReconciler(
-      {} as any,
-      {} as any,
-      undefined,
-      undefined,
-      10,
-    )
+    const reconciler = new WorkspaceGenerationReconciler({} as any, {} as any, undefined, undefined, 10)
     const worker = new WorkspaceGenerationWorker(reconciler)
 
     await expect(worker.reconcileOnce()).resolves.toBe(0)
@@ -38,7 +29,8 @@ describe('WorkspaceGenerationWorker', () => {
     const builder = queryBuilder(rows)
     const placementRepository = { createQueryBuilder: vi.fn(() => builder) }
     const generationService = {
-      reconcile: vi.fn()
+      reconcile: vi
+        .fn()
         .mockRejectedValueOnce(new Error('fixed_generation_upload_failed'))
         .mockResolvedValueOnce({ outcome: 'committed' }),
     }
@@ -65,6 +57,36 @@ describe('WorkspaceGenerationWorker', () => {
     })
     expect(generationService.reconcile).toHaveBeenNthCalledWith(2, {
       placementId: PLACEMENT_B,
+      source,
+      store,
+    })
+  })
+
+  it('retries the same dirty placement on the next reconciliation tick after an outage', async () => {
+    const rows = [{ id: PLACEMENT_A, dirty: true, localGeneration: '3', cosGeneration: '2' }]
+    const builder = queryBuilder(rows)
+    const placementRepository = { createQueryBuilder: vi.fn(() => builder) }
+    const generationService = {
+      reconcile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('fixed_generation_upload_failed'))
+        .mockResolvedValueOnce({ outcome: 'committed' }),
+    }
+    const source = { create: vi.fn() }
+    const store = { putObjects: vi.fn() }
+    const reconciler = new WorkspaceGenerationReconciler(
+      placementRepository as any,
+      generationService as any,
+      source as any,
+      store as any,
+      10,
+    )
+
+    await expect(reconciler.drainOnce()).resolves.toBe(0)
+    await expect(reconciler.drainOnce()).resolves.toBe(1)
+    expect(generationService.reconcile).toHaveBeenCalledTimes(2)
+    expect(generationService.reconcile).toHaveBeenNthCalledWith(2, {
+      placementId: PLACEMENT_A,
       source,
       store,
     })
