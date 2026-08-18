@@ -171,6 +171,51 @@ describe('RunnerAdapterV2 local-first storage', () => {
     expect(jobService.createJob).not.toHaveBeenCalled()
   })
 
+  it('starts an owner-local workspace after a COS-lagged local checkpoint gate succeeds', async () => {
+    const { adapter, jobService, workspacePlacementService } = createAdapter()
+    workspacePlacementService.findBySandboxId.mockResolvedValue({
+      ownerNodeId: NODE_ID,
+      localGeneration: '8',
+      cosGeneration: '7',
+      fenceEpoch: '3',
+    })
+    await adapter.init({ id: RUNNER_ID, apiVersion: '2' } as any)
+
+    await adapter.startSandbox(SANDBOX_ID, 'sandbox-auth-token', {
+      storageBackend: 'local-first',
+    })
+
+    const [, jobType, runnerId, , sandboxId, payload] = jobService.createJob.mock.calls[0]
+    expect(jobType).toBe(JobType.START_SANDBOX)
+    expect(runnerId).toBe(RUNNER_ID)
+    expect(sandboxId).toBe(SANDBOX_ID)
+    expect(workspacePlacementService.assertStartAllowed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: NODE_ID,
+        placement: expect.objectContaining({ localGeneration: '8', cosGeneration: '7' }),
+      }),
+    )
+    expect(workspacePlacementService.acquireWriterLease).toHaveBeenCalled()
+
+    const volumes = JSON.parse(payload.metadata.volumes)
+    expect(volumes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          mountPath: '/workspace',
+          backend: 'local-first',
+          nodeId: NODE_ID,
+          fenceEpoch: '1',
+        }),
+        expect.objectContaining({
+          mountPath: '/config',
+          backend: 'local-first',
+          nodeId: NODE_ID,
+          fenceEpoch: '1',
+        }),
+      ]),
+    )
+  })
+
   it('prepares a stopped target with target fence evidence without acquiring a writer lease', async () => {
     const { adapter, jobService, workspacePlacementService } = createAdapter()
     const targetNodeId = '77777777-7777-4777-8777-777777777777'
