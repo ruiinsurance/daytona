@@ -126,6 +126,13 @@ export class JobStateHandlerService {
     const sandboxId = job.resourceId
     if (!sandboxId) return
 
+    // A move target is created stopped while the source remains authoritative.
+    // Its CREATE job must not mutate the source sandbox state or emit a start
+    // transition before the durable owner CAS.
+    if (job.getPayload<{ moveTargetPreparation?: boolean }>()?.moveTargetPreparation === true) {
+      return
+    }
+
     try {
       const sandbox = await this.sandboxRepository.findOne({ where: { id: sandboxId } })
       if (!sandbox) {

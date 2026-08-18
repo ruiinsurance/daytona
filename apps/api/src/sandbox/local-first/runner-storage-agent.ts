@@ -19,6 +19,7 @@ import {
 import { manifestHash } from './workspace-generation.contract'
 import { isStorageAgentErrorCode } from './storage-agent-error.contract'
 import { WorkspacePlacementService } from '../services/workspace-placement.service'
+import { WorkspaceMoveTargetPreparationService } from '../services/workspace-move-target-preparation.service'
 import type { MoveRuntimeAdapter, MoveRuntimeInput } from '../services/workspace-move.service'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -389,6 +390,7 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
   constructor(
     private readonly client: RunnerStorageAgentClient,
     private readonly workspacePlacementService: WorkspacePlacementService,
+    private readonly targetPreparation: WorkspaceMoveTargetPreparationService,
   ) {}
 
   async quiesce(input: MoveRuntimeInput): Promise<void> {
@@ -439,6 +441,28 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
       throw new Error('storage_agent_target_manifest_mismatch')
     }
     return { generation: checkpoint.generation, manifestHash: expectedHash }
+  }
+
+  async prepareTarget(input: MoveRuntimeInput): Promise<void> {
+    const fenceEpoch = input.operation.expectedFenceEpoch
+    const lease = this.lease(input, fenceEpoch)
+    await this.client.fence({
+      nodeId: input.operation.targetNodeId,
+      volumeId: input.operation.volumeId,
+      sandboxId: input.operation.sandboxId,
+      lease,
+    })
+    await this.targetPreparation.prepare({
+      sandboxId: input.operation.sandboxId,
+      nodeId: input.operation.targetNodeId,
+      preparation: {
+        volumeId: input.operation.volumeId,
+        nodeId: input.operation.targetNodeId,
+        fenceEpoch,
+        leaseOwner: lease.leaseOwner,
+        leaseExpiresAt: lease.leaseExpiresAt,
+      },
+    })
   }
 
   async startTarget(input: MoveRuntimeInput): Promise<void> {

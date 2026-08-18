@@ -155,6 +155,7 @@ describe('WorkspaceMoveService', () => {
         checkpoint: vi.fn(),
         copy: vi.fn(),
         verifyTarget: vi.fn(),
+        prepareTarget: vi.fn(),
         startTarget: vi.fn(),
         retainSource: vi.fn(),
       } as any),
@@ -179,6 +180,7 @@ describe('WorkspaceMoveService', () => {
       checkpoint: vi.fn(),
       copy: vi.fn(),
       verifyTarget: vi.fn(),
+      prepareTarget: vi.fn(),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
     }
@@ -206,6 +208,7 @@ describe('WorkspaceMoveService', () => {
         events.push('verify')
         return { generation: '4', manifestHash: 'a'.repeat(64) }
       }),
+      prepareTarget: vi.fn(async () => events.push('prepare-target')),
       startTarget: vi.fn(async () => events.push('start-target')),
       retainSource: vi.fn(async () => events.push('retain-source')),
     }
@@ -219,7 +222,16 @@ describe('WorkspaceMoveService', () => {
     expect(saveSnapshots.find((snapshot) => snapshot.phase === 'complete')?.completedAt).toEqual(
       new Date('2026-08-17T00:00:00.000Z'),
     )
-    expect(events).toEqual(['quiesce', 'checkpoint', 'copy', 'verify', 'switch-owner', 'start-target', 'retain-source'])
+    expect(events).toEqual([
+      'quiesce',
+      'checkpoint',
+      'copy',
+      'verify',
+      'prepare-target',
+      'switch-owner',
+      'start-target',
+      'retain-source',
+    ])
     expect(workspacePlacementService.switchOwner).toHaveBeenCalledWith(
       expect.objectContaining({
         targetVerified: true,
@@ -233,6 +245,31 @@ describe('WorkspaceMoveService', () => {
     expect(runtime.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ checkpointGeneration: '4' }))
     expect(events.indexOf('verify')).toBeLessThan(events.indexOf('switch-owner'))
     expect(operations[0].phase).toBe('complete')
+  })
+
+  it('keeps the source owner when target preparation fails after verification', async () => {
+    const { service, operations, workspacePlacementService } = makeService()
+    await service.request(request)
+    const runtime = {
+      quiesce: vi.fn(),
+      checkpoint: vi.fn(async () => ({ generation: '4' })),
+      copy: vi.fn(),
+      verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(async () => {
+        throw new Error('storage_agent_target_preparation_failed')
+      }),
+      startTarget: vi.fn(),
+      retainSource: vi.fn(),
+    }
+
+    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('storage_agent_target_preparation_failed')
+
+    expect(operations[0]).toMatchObject({
+      phase: 'target_verified',
+      errorCode: 'storage_agent_target_preparation_failed',
+    })
+    expect(workspacePlacementService.switchOwner).not.toHaveBeenCalled()
+    expect(runtime.startTarget).not.toHaveBeenCalled()
   })
 
   it('resumes from a failed copy phase without repeating quiesce or checkpoint', async () => {
@@ -249,6 +286,7 @@ describe('WorkspaceMoveService', () => {
         }
       }),
       verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
     }
@@ -267,6 +305,7 @@ describe('WorkspaceMoveService', () => {
       checkpoint: vi.fn(async () => ({ generation: '4' })),
       copy: vi.fn(),
       verifyTarget: vi.fn(async () => ({ generation: '5', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
     }
@@ -286,12 +325,14 @@ describe('WorkspaceMoveService', () => {
       checkpoint: vi.fn(async () => ({ generation: '4' })),
       copy: vi.fn(),
       verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
       startTarget: vi.fn(),
       retainSource: vi.fn(),
     }
 
     await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_target_not_schedulable')
 
+    expect(runtime.prepareTarget).not.toHaveBeenCalled()
     expect(workspacePlacementService.switchOwner).not.toHaveBeenCalled()
   })
 
@@ -303,6 +344,7 @@ describe('WorkspaceMoveService', () => {
       checkpoint: vi.fn(async () => ({ generation: '4' })),
       copy: vi.fn(),
       verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
       startTarget: vi.fn(async () => {
         throw new Error('storage_agent_container_start_failed')
       }),
@@ -321,6 +363,7 @@ describe('WorkspaceMoveService', () => {
     ['checkpoint', 'quiescing'],
     ['copy', 'local_checkpointed'],
     ['verifyTarget', 'copying'],
+    ['prepareTarget', 'target_verified'],
     ['startTarget', 'owner_switched'],
     ['retainSource', 'target_started'],
   ] as const)(
@@ -337,7 +380,7 @@ describe('WorkspaceMoveService', () => {
       } = makeService()
       await service.request(request)
       const firstRunAt = new Date('2026-08-17T00:00:00.000Z')
-      const replacementRunAt = new Date(firstRunAt.getTime() + 60_001)
+      const replacementRunAt = new Date(Date.now() + 5 * 60 * 1000 + 1)
       let fail = true
       const runtime = {
         quiesce: vi.fn(async () => {
@@ -366,6 +409,12 @@ describe('WorkspaceMoveService', () => {
           }
           return { generation: '4', manifestHash: 'a'.repeat(64) }
         }),
+        prepareTarget: vi.fn(async () => {
+          if (failedMethod === 'prepareTarget' && fail) {
+            fail = false
+            throw new Error('injected_target_preparation_crash')
+          }
+        }),
         startTarget: vi.fn(async () => {
           if (failedMethod === 'startTarget' && fail) {
             fail = false
@@ -391,8 +440,10 @@ describe('WorkspaceMoveService', () => {
       await expect(replacementService.run(OPERATION_ID, runtime as any, replacementRunAt)).resolves.toMatchObject({
         phase: 'complete',
       })
-      expect(claimExecutions).toHaveLength(2)
-      expect(claimExecutions[1].params.now).toEqual(replacementRunAt)
+      expect(claimExecutions.length).toBeGreaterThanOrEqual(2)
+      expect(claimExecutions.some((execution) => execution.params.now?.getTime() === replacementRunAt.getTime())).toBe(
+        true,
+      )
     },
   )
 })

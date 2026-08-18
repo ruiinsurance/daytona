@@ -20,6 +20,8 @@ const STORAGE_AGENT_ERROR_CODES = new Set([
   'storage_agent_container_start_failed',
   'storage_agent_container_readiness_failed',
   'storage_agent_mount_verification_failed',
+  'storage_agent_target_preparation_failed',
+  'storage_agent_target_preparation_timeout',
   'storage_agent_disabled',
 ])
 

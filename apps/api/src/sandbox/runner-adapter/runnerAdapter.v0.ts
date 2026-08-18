@@ -11,6 +11,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import {
   CreateSandboxSnapshotResult,
   RunnerAdapter,
+  type LocalFirstWorkspacePreparation,
   RunnerInfo,
   RunnerSandboxInfo,
   RunnerSnapshotInfo,
@@ -40,6 +41,7 @@ import { DockerRegistry } from '../../docker-registry/entities/docker-registry.e
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { buildPreparedLocalFirstVolumes } from '../local-first/runner-volume.contract'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -196,7 +198,61 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     otelEndpoint?: string,
     skipStart?: boolean,
   ): Promise<StartSandboxResponse | undefined> {
-    const createSandboxDto: CreateSandboxDTO = {
+    const createSandboxDto = this.buildCreateSandboxPayload(
+      sandbox,
+      snapshotRef,
+      registry,
+      entrypoint,
+      metadata,
+      otelEndpoint,
+      skipStart,
+    )
+
+    const response = await this.sandboxApiClient.create(createSandboxDto)
+
+    if (!response?.data?.daemonVersion) {
+      return undefined
+    }
+
+    return {
+      daemonVersion: response.data.daemonVersion,
+    }
+  }
+
+  async prepareSandbox(
+    sandbox: Sandbox,
+    snapshotRef: string,
+    registry: DockerRegistry | undefined,
+    entrypoint: string[] | undefined,
+    metadata: { [key: string]: string } | undefined,
+    otelEndpoint: string | undefined,
+    preparation: LocalFirstWorkspacePreparation,
+  ): Promise<void> {
+    await this.sandboxApiClient.create(
+      this.buildCreateSandboxPayload(
+        sandbox,
+        snapshotRef,
+        registry,
+        entrypoint,
+        metadata,
+        otelEndpoint,
+        true,
+        preparation,
+      ),
+    )
+  }
+
+  private buildCreateSandboxPayload(
+    sandbox: Sandbox,
+    snapshotRef: string,
+    registry: DockerRegistry | undefined,
+    entrypoint: string[] | undefined,
+    metadata: { [key: string]: string } | undefined,
+    otelEndpoint: string | undefined,
+    skipStart?: boolean,
+    preparation?: LocalFirstWorkspacePreparation,
+  ): CreateSandboxDTO {
+    return {
       id: sandbox.id,
       name: sandbox.name,
       userId: sandbox.organizationId,
@@ -216,11 +272,13 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           }
         : undefined,
       entrypoint: entrypoint,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: preparation
+        ? buildPreparedLocalFirstVolumes(sandbox, preparation)
+        : sandbox.volumes?.map((volume) => ({
+            volumeId: volume.volumeId,
+            mountPath: volume.mountPath,
+            subpath: volume.subpath,
+          })),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
@@ -232,16 +290,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       regionId: sandbox.region,
       linkedSandboxId: sandbox.linkedSandboxId ?? undefined,
       sandboxClass: sandbox.sandboxClass,
-    }
-
-    const response = await this.sandboxApiClient.create(createSandboxDto)
-
-    if (!response?.data?.daemonVersion) {
-      return undefined
-    }
-
-    return {
-      daemonVersion: response.data.daemonVersion,
     }
   }
 

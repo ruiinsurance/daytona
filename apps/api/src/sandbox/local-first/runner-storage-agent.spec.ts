@@ -297,7 +297,7 @@ describe('RunnerStorageAgentCheckpointSource', () => {
 describe('RunnerStorageAgentMoveRuntime', () => {
   it('does not derive a checkpoint generation from the fencing epoch', async () => {
     const agentClient = { checkpoint: vi.fn() }
-    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any)
+    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any, {} as any)
     const operation = {
       id: OPERATION_ID,
       placementId: '55555555-5555-4555-8555-555555555555',
@@ -323,7 +323,7 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     'fails closed when the move operation has no valid authoritative lease expiry',
     async (leaseExpiresAt) => {
       const agentClient = { quiesce: vi.fn() }
-      const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any)
+      const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any, {} as any)
       const operation = {
         id: OPERATION_ID,
         placementId: '55555555-5555-4555-8555-555555555555',
@@ -362,7 +362,7 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     const placementService = {
       acquireWriterLease: vi.fn().mockResolvedValue({ leaseExpiresAt: new Date(Date.now() + 60_000) }),
     }
-    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, placementService as any)
+    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, placementService as any, {} as any)
     const operation = {
       id: OPERATION_ID,
       placementId: '55555555-5555-4555-8555-555555555555',
@@ -432,6 +432,34 @@ describe('RunnerStorageAgentMoveRuntime', () => {
           fenceEpoch: '5',
           leaseExpiresAt: LEASE_EXPIRES_AT.toISOString(),
         }),
+      }),
+    )
+  })
+
+  it('fences the target before asking the control plane to create a stopped container', async () => {
+    const agentClient = { fence: vi.fn().mockResolvedValue(undefined) }
+    const targetPreparation = { prepare: vi.fn().mockResolvedValue(undefined) }
+    const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any, targetPreparation as any)
+    const operation = {
+      id: OPERATION_ID,
+      placementId: '55555555-5555-4555-8555-555555555555',
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      sourceNodeId: NODE_ID,
+      targetNodeId: '66666666-6666-4666-8666-666666666666',
+      expectedFenceEpoch: '4',
+      leaseOwner: `move-worker:test:${OPERATION_ID}`,
+      leaseExpiresAt: LEASE_EXPIRES_AT,
+    }
+
+    await runtime.prepareTarget({ operation, fenceEpoch: '4', checkpointGeneration: '7', targetGeneration: '7' } as any)
+
+    expect(agentClient.fence).toHaveBeenCalledWith(expect.objectContaining({ nodeId: operation.targetNodeId }))
+    expect(targetPreparation.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sandboxId: SANDBOX_ID,
+        nodeId: operation.targetNodeId,
+        preparation: expect.objectContaining({ fenceEpoch: '4', volumeId: VOLUME_ID }),
       }),
     )
   })

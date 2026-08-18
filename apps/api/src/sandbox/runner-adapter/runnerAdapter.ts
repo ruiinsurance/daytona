@@ -15,6 +15,9 @@ import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import type { LocalFirstWorkspacePreparation } from '../local-first/runner-volume.contract'
+
+export type { LocalFirstWorkspacePreparation } from '../local-first/runner-volume.contract'
 
 export interface RunnerSandboxInfo {
   state: SandboxState
@@ -87,6 +90,15 @@ export interface RunnerAdapter {
     otelEndpoint?: string,
     skipStart?: boolean,
   ): Promise<StartSandboxResponse | undefined>
+  prepareSandbox(
+    sandbox: Sandbox,
+    snapshotRef: string,
+    registry: DockerRegistry | undefined,
+    entrypoint: string[] | undefined,
+    metadata: { [key: string]: string } | undefined,
+    otelEndpoint: string | undefined,
+    preparation: LocalFirstWorkspacePreparation,
+  ): Promise<void>
   startSandbox(
     sandboxId: string,
     authToken: string,

@@ -90,14 +90,12 @@ import {
   WorkspaceGenerationWorker,
 } from './services/workspace-generation-worker.service'
 import { WorkspaceMoveService } from './services/workspace-move.service'
+import { WorkspaceMoveTargetPreparationService } from './services/workspace-move-target-preparation.service'
 import { WorkspaceMoveReconciler, WorkspaceMoveWorker } from './services/workspace-move-worker.service'
 import { WorkspaceDrainService } from './services/workspace-drain.service'
 import { WorkspaceDrainWorker } from './services/workspace-drain-worker.service'
 import { WorkspaceMoveController } from './controllers/workspace-move.controller'
-import {
-  LOCAL_FIRST_MOVE_RECONCILER,
-  LOCAL_FIRST_MOVE_RUNTIME,
-} from './local-first/workspace-move.tokens'
+import { LOCAL_FIRST_MOVE_RECONCILER, LOCAL_FIRST_MOVE_RUNTIME } from './local-first/workspace-move.tokens'
 
 @Module({
   imports: [
@@ -174,6 +172,7 @@ import {
     WorkspaceGenerationReconciler,
     WorkspaceGenerationWorker,
     WorkspaceMoveService,
+    WorkspaceMoveTargetPreparationService,
     WorkspaceMoveReconciler,
     WorkspaceMoveWorker,
     WorkspaceDrainService,
@@ -243,14 +242,20 @@ import {
     },
     {
       provide: LOCAL_FIRST_MOVE_RUNTIME,
-      inject: [TypedConfigService, RunnerStorageAgentClient, WorkspacePlacementService],
+      inject: [
+        TypedConfigService,
+        RunnerStorageAgentClient,
+        WorkspacePlacementService,
+        WorkspaceMoveTargetPreparationService,
+      ],
       useFactory: (
         configService: TypedConfigService,
         client: RunnerStorageAgentClient,
         workspacePlacementService: WorkspacePlacementService,
+        targetPreparation: WorkspaceMoveTargetPreparationService,
       ) => {
         if (!configService.get('localFirstGeneration.enabled')) return undefined
-        return new RunnerStorageAgentMoveRuntime(client, workspacePlacementService)
+        return new RunnerStorageAgentMoveRuntime(client, workspacePlacementService, targetPreparation)
       },
     },
     {

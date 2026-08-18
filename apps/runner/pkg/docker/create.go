@@ -42,6 +42,7 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 	defer timer.Timer()()
 
 	startTime := time.Now()
+	skipStart := sandboxDto.SkipStart != nil && *sandboxDto.SkipStart
 	defer func() {
 		obs, err := common.ContainerOperationDuration.GetMetricWithLabelValues("create")
 		if err == nil {
@@ -83,7 +84,7 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		}
 	}
 
-	if state == enums.SandboxStateStarted || state == enums.SandboxStateStarting {
+	if !skipStart && (state == enums.SandboxStateStarted || state == enums.SandboxStateStarting) {
 		// Re-assert link-network wiring on retries so idempotent creates still end
 		// up with both sandboxes connected to the shared network.
 		if _, err := d.reconcileFollowerLinkNetwork(ctx, sandboxDto); err != nil {
@@ -100,7 +101,7 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return sandboxDto.Id, daemonVersion, nil
 	}
 
-	if state == enums.SandboxStateStopped || state == enums.SandboxStateCreating {
+	if !skipStart && (state == enums.SandboxStateStopped || state == enums.SandboxStateCreating) {
 		// A follower whose first Create attempt crashed between ContainerCreate and
 		// NetworkConnect lands here on retry. Reconcile the link network BEFORE Start
 		if _, err := d.reconcileFollowerLinkNetwork(ctx, sandboxDto); err != nil {

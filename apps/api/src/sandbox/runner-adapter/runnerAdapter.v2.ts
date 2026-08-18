@@ -44,6 +44,10 @@ import {
 } from '@daytona/runner-api-client'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
 import { LOCAL_FIRST_STORAGE_BACKEND } from '../local-first/storage-node-contract'
+import {
+  buildPreparedLocalFirstVolumes,
+  type LocalFirstWorkspacePreparation,
+} from '../local-first/runner-volume.contract'
 import { StorageNodeService } from '../services/storage-node.service'
 import { WorkspacePlacementService } from '../services/workspace-placement.service'
 
@@ -134,6 +138,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     // Map job types to transitional states
     switch (job.type) {
       case JobType.CREATE_SANDBOX:
+        if (job.getPayload<{ moveTargetPreparation?: boolean }>()?.moveTargetPreparation === true) {
+          return sandbox.state
+        }
         if (job.status === JobStatus.COMPLETED) {
           return SandboxState.STARTED
         }
@@ -162,42 +169,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     otelEndpoint?: string,
     skipStart?: boolean,
   ): Promise<StartSandboxResponse | undefined> {
-    const localFirstRequested = metadata?.storageBackend === LOCAL_FIRST_STORAGE_BACKEND
-      || sandbox.volumes?.some((volume) => volume.backend === LOCAL_FIRST_STORAGE_BACKEND)
-    const volumes = await this.buildRunnerVolumes(sandbox, localFirstRequested)
-    const payload: CreateSandboxDTO = {
-      id: sandbox.id,
-      name: sandbox.name,
-      userId: sandbox.organizationId,
-      snapshot: snapshotRef,
-      osUser: sandbox.osUser,
-      cpuQuota: sandbox.cpu,
-      gpuQuota: sandbox.gpu,
-      memoryQuota: sandbox.mem,
-      storageQuota: sandbox.disk,
-      env: sandbox.env,
-      registry: registry
-        ? {
-            project: registry.project,
-            url: registry.url.replace(/^(https?:\/\/)/, ''),
-            username: registry.username,
-            password: registry.password,
-          }
-        : undefined,
-      entrypoint: entrypoint,
-      volumes,
-      networkBlockAll: sandbox.networkBlockAll,
-      networkAllowList: sandbox.networkAllowList,
-      domainAllowList: sandbox.domainAllowList,
-      metadata: metadata,
-      authToken: sandbox.authToken,
-      otelEndpoint: otelEndpoint,
-      skipStart: skipStart,
-      organizationId: sandbox.organizationId,
-      regionId: sandbox.region,
-      linkedSandboxId: sandbox.linkedSandboxId ?? undefined,
-      sandboxClass: sandbox.sandboxClass,
-    }
+    const payload = await this.buildCreateSandboxPayload(
+      sandbox,
+      snapshotRef,
+      registry,
+      entrypoint,
+      metadata,
+      otelEndpoint,
+      skipStart,
+    )
 
     await this.jobService.createJob(
       null,
@@ -212,6 +192,36 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     // Daemon version will be set in the job result metadata
     return undefined
+  }
+
+  async prepareSandbox(
+    sandbox: Sandbox,
+    snapshotRef: string,
+    registry: DockerRegistry | undefined,
+    entrypoint: string[] | undefined,
+    metadata: { [key: string]: string } | undefined,
+    otelEndpoint: string | undefined,
+    preparation: LocalFirstWorkspacePreparation,
+  ): Promise<void> {
+    const payload = await this.buildCreateSandboxPayload(
+      sandbox,
+      snapshotRef,
+      registry,
+      entrypoint,
+      metadata,
+      otelEndpoint,
+      true,
+      preparation,
+    )
+    const job = await this.jobService.createJob(
+      null,
+      JobType.CREATE_SANDBOX,
+      this.runner.id,
+      ResourceType.SANDBOX,
+      sandbox.id,
+      { ...payload, moveTargetPreparation: true },
+    )
+    await this.waitForTargetPreparation(job.id)
   }
 
   async startSandbox(
@@ -252,22 +262,79 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     return undefined
   }
 
-  private async buildRunnerVolumes(sandbox: Sandbox, localFirst: boolean): Promise<Array<Record<string, string>>> {
-    const volumes = sandbox.volumes?.map((volume) => ({
-      volumeId: volume.volumeId,
-      mountPath: volume.mountPath,
-      ...(volume.subpath ? { subpath: volume.subpath } : {}),
-    })) ?? []
+  private async buildCreateSandboxPayload(
+    sandbox: Sandbox,
+    snapshotRef: string,
+    registry: DockerRegistry | undefined,
+    entrypoint: string[] | undefined,
+    metadata: { [key: string]: string } | undefined,
+    otelEndpoint: string | undefined,
+    skipStart?: boolean,
+    preparation?: LocalFirstWorkspacePreparation,
+  ): Promise<CreateSandboxDTO> {
+    const localFirstRequested =
+      Boolean(preparation) ||
+      metadata?.storageBackend === LOCAL_FIRST_STORAGE_BACKEND ||
+      sandbox.volumes?.some((volume) => volume.backend === LOCAL_FIRST_STORAGE_BACKEND)
+    const volumes = await this.buildRunnerVolumes(sandbox, localFirstRequested, preparation)
+    return {
+      id: sandbox.id,
+      name: sandbox.name,
+      userId: sandbox.organizationId,
+      snapshot: snapshotRef,
+      osUser: sandbox.osUser,
+      cpuQuota: sandbox.cpu,
+      gpuQuota: sandbox.gpu,
+      memoryQuota: sandbox.mem,
+      storageQuota: sandbox.disk,
+      env: sandbox.env,
+      registry: registry
+        ? {
+            project: registry.project,
+            url: registry.url.replace(/^(https?:\/\/)/, ''),
+            username: registry.username,
+            password: registry.password,
+          }
+        : undefined,
+      entrypoint,
+      volumes,
+      networkBlockAll: sandbox.networkBlockAll,
+      networkAllowList: sandbox.networkAllowList,
+      domainAllowList: sandbox.domainAllowList,
+      metadata,
+      authToken: sandbox.authToken,
+      otelEndpoint,
+      skipStart,
+      organizationId: sandbox.organizationId,
+      regionId: sandbox.region,
+      linkedSandboxId: sandbox.linkedSandboxId ?? undefined,
+      sandboxClass: sandbox.sandboxClass,
+    }
+  }
+
+  private async buildRunnerVolumes(
+    sandbox: Sandbox,
+    localFirst: boolean,
+    preparation?: LocalFirstWorkspacePreparation,
+  ): Promise<Array<Record<string, string>>> {
+    const volumes =
+      sandbox.volumes?.map((volume) => ({
+        volumeId: volume.volumeId,
+        mountPath: volume.mountPath,
+        ...(volume.subpath ? { subpath: volume.subpath } : {}),
+      })) ?? []
     if (!localFirst) return volumes
+
+    if (preparation) return buildPreparedLocalFirstVolumes(sandbox, preparation)
 
     const workspace = sandbox.volumes?.find((volume) => volume.mountPath === '/workspace')
     const config = sandbox.volumes?.find((volume) => volume.mountPath === '/config')
     if (
-      !workspace
-      || !config
-      || workspace.volumeId !== config.volumeId
-      || workspace.subpath !== config.subpath
-      || workspace.subpath !== `sandboxes/${sandbox.id}/workspace`
+      !workspace ||
+      !config ||
+      workspace.volumeId !== config.volumeId ||
+      workspace.subpath !== config.subpath ||
+      workspace.subpath !== `sandboxes/${sandbox.id}/workspace`
     ) {
       throw new Error('local-first workspace requires matching /workspace and /config identity')
     }
@@ -307,9 +374,8 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       leaseOwner,
     })
     if (!leased.leaseExpiresAt) throw new Error('local-first writer lease has no expiry')
-    const leaseExpiresAt = leased.leaseExpiresAt instanceof Date
-      ? leased.leaseExpiresAt
-      : new Date(leased.leaseExpiresAt)
+    const leaseExpiresAt =
+      leased.leaseExpiresAt instanceof Date ? leased.leaseExpiresAt : new Date(leased.leaseExpiresAt)
     if (!Number.isFinite(leaseExpiresAt.getTime())) throw new Error('local-first writer lease expiry is invalid')
 
     return volumes.map((volume) => {
@@ -323,6 +389,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         leaseExpiresAt: leaseExpiresAt.toISOString(),
       }
     })
+  }
+
+  private async waitForTargetPreparation(jobId: string): Promise<void> {
+    const deadline = Date.now() + 4 * 60 * 1000
+    while (Date.now() < deadline) {
+      const job = await this.jobService.findOne(jobId)
+      if (!job) throw new Error('storage_agent_target_preparation_failed')
+      if (job.status === JobStatus.COMPLETED) return
+      if (job.status === JobStatus.FAILED) throw new Error('storage_agent_target_preparation_failed')
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    throw new Error('storage_agent_target_preparation_timeout')
   }
 
   async stopSandbox(sandboxId: string, force?: boolean): Promise<void> {

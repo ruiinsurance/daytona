@@ -20,11 +20,14 @@ import {
 import { isStorageAgentErrorCode } from '../local-first/storage-agent-error.contract'
 import { WorkspacePlacementService } from './workspace-placement.service'
 
+const MOVE_OPERATION_LEASE_MS = 5 * 60 * 1000
+
 export interface MoveRuntimeAdapter {
   quiesce(input: MoveRuntimeInput): Promise<void>
   checkpoint(input: MoveRuntimeInput): Promise<{ generation: string }>
   copy(input: MoveRuntimeInput): Promise<void>
   verifyTarget(input: MoveRuntimeInput): Promise<{ generation: string; manifestHash: string }>
+  prepareTarget(input: MoveRuntimeInput): Promise<void>
   startTarget(input: MoveRuntimeInput): Promise<void>
   retainSource(input: MoveRuntimeInput): Promise<void>
 }
@@ -175,6 +178,12 @@ export class WorkspaceMoveService {
         await this.operationRepository.save(operation)
         throw new Error('move_target_not_schedulable')
       }
+      // Preparation waits on a bounded Runner job. Refresh the control-plane
+      // lease immediately before sending the target-side evidence so the
+      // storage agent cannot reject a valid move because earlier phases used
+      // most of the original lease window.
+      operation = await this.claimLease(operation, new Date())
+      await this.runPhaseAction(operation, runtime.prepareTarget, runtime)
       const placement = await this.placementRepository.findOne({ where: { id: operation.placementId } })
       if (!placement) throw new NotFoundException('Workspace placement not found')
       const expectedFence = Number(operation.expectedFenceEpoch)
@@ -307,7 +316,7 @@ export class WorkspaceMoveService {
 
   private async claimLease(operation: WorkspaceOperation, now: Date): Promise<WorkspaceOperation> {
     const leaseOwner = `move-worker:${this.workerId}:${operation.id}`
-    const leaseExpiresAt = new Date(now.getTime() + 60_000)
+    const leaseExpiresAt = new Date(now.getTime() + MOVE_OPERATION_LEASE_MS)
     const result = await this.operationRepository
       .createQueryBuilder()
       .update(WorkspaceOperation)
