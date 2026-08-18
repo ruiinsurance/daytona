@@ -35,6 +35,7 @@ func (d *DockerClient) Destroy(ctx context.Context, containerId string) error {
 		if !teardownLinkNetwork {
 			return
 		}
+		d.stopLocalFirstWorkspaceWatcher(containerId)
 		if err := d.teardownOwnedLinkNetwork(ctx, containerId); err != nil {
 			d.logger.WarnContext(ctx, "Failed to teardown owned link network", "sandboxId", containerId, "error", err)
 		}

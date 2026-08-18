@@ -7725,6 +7725,41 @@ paths:
       summary: Record storage capacity and heartbeat for the authenticated Runner
       tags:
       - storage-nodes
+  /storage-nodes/{nodeId}/workspaces/dirty:
+    post:
+      operationId: markStorageWorkspaceDirty
+      parameters:
+      - description: Stable storage node identifier
+        explode: false
+        in: path
+        name: nodeId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkWorkspaceDirty"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkWorkspaceDirtyResponse"
+          description: ""
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Mark an owner-local workspace dirty
+      tags:
+      - storage-nodes
   /runners/{runnerId}/storage-nodes/{nodeId}:
     get:
       operationId: getStorageNodeStatus
@@ -14938,6 +14973,31 @@ components:
           type: string
       required:
       - status
+      type: object
+    MarkWorkspaceDirty:
+      properties:
+        volumeId:
+          description: Logical local-first volume identity
+          type: string
+        sandboxId:
+          description: Stable Suna sandbox identity
+          format: uuid
+          type: string
+        localGeneration:
+          description: Monotonic local generation observation
+          pattern: ^(0|[1-9][0-9]*)$
+          type: string
+      required:
+      - sandboxId
+      - volumeId
+      type: object
+    MarkWorkspaceDirtyResponse:
+      properties:
+        accepted:
+          example: true
+          type: boolean
+      required:
+      - accepted
       type: object
     RegisterStorageNode:
       example:

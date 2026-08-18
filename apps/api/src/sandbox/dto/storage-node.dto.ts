@@ -4,10 +4,13 @@
  */
 
 import { Type } from 'class-transformer'
-import { IsInt, IsObject, IsOptional, IsUUID, Min } from 'class-validator'
+import { IsInt, IsObject, IsOptional, IsUUID, Matches, Min } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { StorageNode } from '../entities/storage-node.entity'
 import { StorageNodeState } from '../enums/storage-node-state.enum'
+
+const VOLUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const DECIMAL_RE = /^(0|[1-9][0-9]*)$/
 
 @ApiSchema({ name: 'RegisterStorageNode' })
 export class RegisterStorageNodeDto {
@@ -63,6 +66,28 @@ export class HeartbeatStorageNodeDto {
   @IsOptional()
   @IsObject()
   labels?: Record<string, string>
+}
+
+@ApiSchema({ name: 'MarkWorkspaceDirty' })
+export class MarkWorkspaceDirtyDto {
+  @ApiProperty({ description: 'Logical local-first volume identity' })
+  @Matches(VOLUME_ID_RE)
+  volumeId: string
+
+  @ApiProperty({ description: 'Stable Suna sandbox identity', format: 'uuid' })
+  @IsUUID()
+  sandboxId: string
+
+  @ApiPropertyOptional({ description: 'Monotonic local generation observation', pattern: '^(0|[1-9][0-9]*)$' })
+  @IsOptional()
+  @Matches(DECIMAL_RE)
+  localGeneration?: string
+}
+
+@ApiSchema({ name: 'MarkWorkspaceDirtyResponse' })
+export class MarkWorkspaceDirtyResponseDto {
+  @ApiProperty({ example: true })
+  accepted: boolean
 }
 
 @ApiSchema({ name: 'StorageNode' })

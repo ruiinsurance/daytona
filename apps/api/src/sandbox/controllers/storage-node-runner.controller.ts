@@ -11,8 +11,15 @@ import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-r
 import { IsRunnerAuthContext } from '../../common/decorators/auth-context.decorator'
 import { RunnerAuthContext } from '../../common/interfaces/runner-auth-context.interface'
 import { RunnerAuthContextGuard } from '../guards/runner-auth-context.guard'
-import { HeartbeatStorageNodeDto, RegisterStorageNodeDto, StorageNodeDto } from '../dto/storage-node.dto'
+import {
+  HeartbeatStorageNodeDto,
+  MarkWorkspaceDirtyDto,
+  MarkWorkspaceDirtyResponseDto,
+  RegisterStorageNodeDto,
+  StorageNodeDto,
+} from '../dto/storage-node.dto'
 import { StorageNodeService } from '../services/storage-node.service'
+import { WorkspaceGenerationService } from '../services/workspace-generation.service'
 
 @Controller('storage-nodes')
 @ApiTags('storage-nodes')
@@ -21,7 +28,10 @@ import { StorageNodeService } from '../services/storage-node.service'
 @AuthStrategy(AuthStrategyType.API_KEY)
 @UseGuards(AuthenticatedRateLimitGuard)
 export class StorageNodeRunnerController {
-  constructor(private readonly storageNodeService: StorageNodeService) {}
+  constructor(
+    private readonly storageNodeService: StorageNodeService,
+    private readonly workspaceGenerationService: WorkspaceGenerationService,
+  ) {}
 
   @Post('register')
   @HttpCode(200)
@@ -71,5 +81,30 @@ export class StorageNodeRunnerController {
       labels: input.labels,
     })
     return StorageNodeDto.fromStorageNode(node)
+  }
+
+  @Post(':nodeId/workspaces/dirty')
+  @HttpCode(200)
+  @AuthStrategy(AuthStrategyType.API_KEY)
+  @UseGuards(RunnerAuthContextGuard)
+  @ApiOperation({
+    summary: 'Mark an owner-local workspace dirty',
+    operationId: 'markStorageWorkspaceDirty',
+  })
+  @ApiParam({ name: 'nodeId', description: 'Stable storage node identifier', format: 'uuid' })
+  @ApiResponse({ status: 200, type: MarkWorkspaceDirtyResponseDto })
+  async markDirty(
+    @IsRunnerAuthContext() runnerContext: RunnerAuthContext,
+    @Param('nodeId', ParseUUIDPipe) nodeId: string,
+    @Body() input: MarkWorkspaceDirtyDto,
+  ): Promise<MarkWorkspaceDirtyResponseDto> {
+    await this.storageNodeService.findOneForRunnerOrFail(nodeId, runnerContext.runnerId)
+    await this.workspaceGenerationService.markDirtyByIdentity({
+      volumeId: input.volumeId,
+      sandboxId: input.sandboxId,
+      ownerNodeId: nodeId,
+      localGeneration: input.localGeneration,
+    })
+    return { accepted: true }
   }
 }

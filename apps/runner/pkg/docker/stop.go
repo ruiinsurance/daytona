@@ -17,6 +17,7 @@ func (d *DockerClient) Stop(ctx context.Context, containerId string, force bool)
 	state, err := d.GetSandboxState(ctx, containerId)
 	if err == nil && state == enums.SandboxStateStopped {
 		d.logger.DebugContext(ctx, "Sandbox is already stopped", "containerId", containerId)
+		d.stopLocalFirstWorkspaceWatcher(containerId)
 		return nil
 	}
 
@@ -52,6 +53,7 @@ func (d *DockerClient) Stop(ctx context.Context, containerId string, force bool)
 		}
 	case <-statusCh:
 		// Container stopped successfully
+		d.stopLocalFirstWorkspaceWatcher(containerId)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

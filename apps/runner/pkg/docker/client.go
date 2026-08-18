@@ -13,6 +13,7 @@ import (
 	"github.com/daytonaio/common-go/pkg/utils"
 	"github.com/daytonaio/runner/pkg/cache"
 	"github.com/daytonaio/runner/pkg/common"
+	"github.com/daytonaio/runner/pkg/localfirst"
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
@@ -33,6 +34,7 @@ type DockerClientConfig struct {
 	LocalFirstStorageEnabled     bool
 	LocalStorageRoot             string
 	StorageNodeId                string
+	WorkspaceDirtyNotifier       localfirst.DirtyNotifier
 	DaemonPath                   string
 	ComputerUsePluginPath        string
 	NetRulesManager              *netrules.NetRulesManager
@@ -141,6 +143,11 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		}
 	}
 
+	var workspaceWatcher *localfirst.WorkspaceWatcher
+	if config.LocalFirstStorageEnabled && config.WorkspaceDirtyNotifier != nil {
+		workspaceWatcher = localfirst.NewWorkspaceWatcher(logger, config.WorkspaceDirtyNotifier, localfirst.WorkspaceWatcherOptions{})
+	}
+
 	return &DockerClient{
 		apiClient:                    config.ApiClient,
 		backupInfoCache:              config.BackupInfoCache,
@@ -156,6 +163,7 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		localFirstStorageEnabled:     config.LocalFirstStorageEnabled,
 		localStorageRoot:             config.LocalStorageRoot,
 		storageNodeId:                config.StorageNodeId,
+		workspaceWatcher:             workspaceWatcher,
 		volumeMutexes:                make(map[string]*sync.Mutex),
 		daemonPath:                   config.DaemonPath,
 		computerUsePluginPath:        config.ComputerUsePluginPath,
@@ -247,4 +255,5 @@ type DockerClient struct {
 	gpuAllocator                 *gpuAllocator
 	mountKvmToAndroidSandbox     bool
 	containerVolumeMountVerifier containerVolumeMountVerifier
+	workspaceWatcher             *localfirst.WorkspaceWatcher
 }

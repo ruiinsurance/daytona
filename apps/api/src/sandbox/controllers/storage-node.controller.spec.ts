@@ -5,6 +5,8 @@ import { StorageNodeState } from '../enums/storage-node-state.enum'
 
 const RUNNER_ID = '11111111-1111-4111-8111-111111111111'
 const NODE_ID = '22222222-2222-4222-8222-222222222222'
+const VOLUME_ID = '33333333-3333-4333-8333-333333333333'
+const SANDBOX_ID = '44444444-4444-4444-8444-444444444444'
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -27,15 +29,18 @@ function node(overrides: Record<string, unknown> = {}) {
 describe('StorageNodeRunnerController', () => {
   it('registers using the authenticated runner identity and never accepts a body runnerId', async () => {
     const service = { register: vi.fn().mockResolvedValue(node()) }
-    const controller = new StorageNodeRunnerController(service as any)
+    const controller = new StorageNodeRunnerController(service as any, {} as any)
 
-    await controller.register({ runnerId: RUNNER_ID } as any, {
-      nodeId: NODE_ID,
-      capacityBytes: 1000,
-      capacityInodes: 100,
-      labels: { zone: 'test' },
-      runnerId: 'untrusted-body-value',
-    } as any)
+    await controller.register(
+      { runnerId: RUNNER_ID } as any,
+      {
+        nodeId: NODE_ID,
+        capacityBytes: 1000,
+        capacityInodes: 100,
+        labels: { zone: 'test' },
+        runnerId: 'untrusted-body-value',
+      } as any,
+    )
 
     expect(service.register).toHaveBeenCalledWith({
       runnerId: RUNNER_ID,
@@ -48,7 +53,7 @@ describe('StorageNodeRunnerController', () => {
 
   it('binds heartbeat to both the authenticated runner and the path node id', async () => {
     const service = { heartbeat: vi.fn().mockResolvedValue(node({ heartbeatAt: new Date() })) }
-    const controller = new StorageNodeRunnerController(service as any)
+    const controller = new StorageNodeRunnerController(service as any, {} as any)
 
     await controller.heartbeat({ runnerId: RUNNER_ID } as any, NODE_ID, {
       capacityBytes: 1000,
@@ -65,6 +70,28 @@ describe('StorageNodeRunnerController', () => {
       capacityInodes: 100,
       usedInodes: 10,
       labels: undefined,
+    })
+  })
+
+  it('accepts dirty events only for the authenticated node and canonical workspace identity', async () => {
+    const storageNodeService = { findOneForRunnerOrFail: vi.fn().mockResolvedValue(node()) }
+    const generationService = { markDirtyByIdentity: vi.fn().mockResolvedValue({ dirty: true }) }
+    const controller = new StorageNodeRunnerController(storageNodeService as any, generationService as any)
+
+    await expect(
+      controller.markDirty({ runnerId: RUNNER_ID } as any, NODE_ID, {
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        localGeneration: '4',
+      } as any),
+    ).resolves.toEqual({ accepted: true })
+
+    expect(storageNodeService.findOneForRunnerOrFail).toHaveBeenCalledWith(NODE_ID, RUNNER_ID)
+    expect(generationService.markDirtyByIdentity).toHaveBeenCalledWith({
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      ownerNodeId: NODE_ID,
+      localGeneration: '4',
     })
   })
 })

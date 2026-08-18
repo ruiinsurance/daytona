@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { StorageNodeRunnerController } from './storage-node-runner.controller'
 import { RunnerAuthContextGuard } from '../guards/runner-auth-context.guard'
 import { AuthStrategyType } from '../../auth/enums/auth-strategy-type.enum'
@@ -29,6 +29,14 @@ describe('[AUTH] StorageNodeRunnerController', () => {
 
   it('heartbeat', () => {
     const methodName = trackMethod('heartbeat')
+    expect(isPublicEndpoint(StorageNodeRunnerController, methodName)).toBe(false)
+    expectArrayMatch(getAllowedAuthStrategies(StorageNodeRunnerController, methodName), [AuthStrategyType.API_KEY])
+    expectArrayMatch(getAuthContextGuards(StorageNodeRunnerController, methodName), [RunnerAuthContextGuard])
+    expect(getRequiredOrganizationMemberRole(StorageNodeRunnerController, methodName)).toBeUndefined()
+  })
+
+  it('markDirty', () => {
+    const methodName = trackMethod('markDirty')
     expect(isPublicEndpoint(StorageNodeRunnerController, methodName)).toBe(false)
     expectArrayMatch(getAllowedAuthStrategies(StorageNodeRunnerController, methodName), [AuthStrategyType.API_KEY])
     expectArrayMatch(getAuthContextGuards(StorageNodeRunnerController, methodName), [RunnerAuthContextGuard])

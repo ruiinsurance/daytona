@@ -29,8 +29,25 @@ function placement(overrides: Record<string, unknown> = {}) {
 function setup() {
   const current = placement()
   const generationRows: any[] = []
+  const query: any = {
+    update: vi.fn().mockReturnThis(),
+    set: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    andWhere: vi.fn().mockReturnThis(),
+    setParameter: vi.fn().mockReturnThis(),
+    returning: vi.fn().mockReturnThis(),
+    execute: vi.fn(),
+  }
+  query.execute.mockImplementation(async () => {
+    current.dirty = true
+    current.replicationStatus = 'pending'
+    const incoming = query.setParameter.mock.calls.find(([name]: [string]) => name === 'incomingGeneration')?.[1]
+    if (incoming !== undefined) current.localGeneration = String(incoming)
+    return { raw: [current], affected: 1 }
+  })
   const placementRepository = {
     findOne: vi.fn().mockResolvedValue(current),
+    createQueryBuilder: vi.fn().mockReturnValue(query),
     save: vi.fn(async (value) => value),
   }
   const generationRepository = {

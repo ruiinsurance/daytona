@@ -27,6 +27,7 @@ const (
 	localFirstStartContainerStartFailed     = "storage_agent_container_start_failed"
 	localFirstStartContainerReadinessFailed = "storage_agent_container_readiness_failed"
 	localFirstStartMountVerificationFailed  = "storage_agent_mount_verification_failed"
+	localFirstStartWatcherFailed            = "storage_agent_workspace_watcher_failed"
 	localFirstContainerVisibilityTimeout    = 5 * time.Second
 	localFirstContainerVisibilityInterval   = 50 * time.Millisecond
 )
@@ -105,6 +106,9 @@ func (d *DockerClient) StartLocalFirstWorkspace(
 		if err := d.verifyContainerVolumeMounts(ctx, inspected, volumes, containerID); err != nil {
 			return newLocalFirstStartError(localFirstStartMountVerificationFailed, d.failClosedContainerVolumeMount(ctx, inspected, err))
 		}
+		if err := d.startLocalFirstWorkspaceWatcher(ctx, sandboxID, volumes); err != nil {
+			return newLocalFirstStartError(localFirstStartWatcherFailed, err)
+		}
 		return nil
 	}
 	if err := d.apiClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
@@ -116,6 +120,9 @@ func (d *DockerClient) StartLocalFirstWorkspace(
 	}
 	if err := d.verifyContainerVolumeMounts(ctx, running, volumes, containerID); err != nil {
 		return newLocalFirstStartError(localFirstStartMountVerificationFailed, d.failClosedContainerVolumeMount(ctx, running, err))
+	}
+	if err := d.startLocalFirstWorkspaceWatcher(ctx, sandboxID, volumes); err != nil {
+		return newLocalFirstStartError(localFirstStartWatcherFailed, err)
 	}
 	return nil
 }
@@ -186,6 +193,9 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 		if err := d.verifyContainerVolumeMounts(ctx, c, volumes, containerId); err != nil {
 			return nil, "", d.failClosedContainerVolumeMount(ctx, c, err)
 		}
+		if err := d.startLocalFirstWorkspaceWatcher(ctx, containerId, volumes); err != nil {
+			return nil, "", err
+		}
 
 		containerIP := GetContainerIpAddress(ctx, c)
 		if containerIP == "" {
@@ -219,6 +229,9 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	}
 	if err := d.verifyContainerVolumeMounts(ctx, runningContainer, volumes, containerId); err != nil {
 		return nil, "", d.failClosedContainerVolumeMount(ctx, runningContainer, err)
+	}
+	if err := d.startLocalFirstWorkspaceWatcher(ctx, containerId, volumes); err != nil {
+		return nil, "", err
 	}
 
 	containerIP := GetContainerIpAddress(ctx, runningContainer)

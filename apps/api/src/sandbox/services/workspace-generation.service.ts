@@ -33,6 +33,7 @@ import { LOCAL_FIRST_GENERATION_PREFIX } from '../local-first/workspace-generati
 
 const FIXED_UPLOAD_ERROR = 'generation_upload_failed'
 const FIXED_PERSIST_ERROR = 'generation_persist_failed'
+const VOLUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 @Injectable()
 export class WorkspaceGenerationService {
@@ -49,10 +50,16 @@ export class WorkspaceGenerationService {
     private readonly generationPrefix = 'local-first',
   ) {}
 
-  async markDirty(input: { placementId: string; localGeneration?: string }): Promise<WorkspacePlacement> {
+  async markDirty(input: {
+    placementId: string
+    ownerNodeId?: string
+    localGeneration?: string
+  }): Promise<WorkspacePlacement> {
+    assertUuid(input.placementId, 'placement_id_invalid')
+    if (input.ownerNodeId) assertUuid(input.ownerNodeId, 'owner_node_id_invalid')
     const placement = await this.placementRepository.findOne({ where: { id: input.placementId } })
     if (!placement) throw new NotFoundException('Workspace placement not found')
-    placement.dirty = true
+
     if (input.localGeneration !== undefined) {
       assertDecimal(input.localGeneration, 'local_generation_invalid')
       assertDecimal(placement.localGeneration, 'local_generation_invalid')
@@ -64,10 +71,63 @@ export class WorkspaceGenerationService {
       ) {
         throw new ConflictException('local_generation_regression')
       }
-      placement.localGeneration = input.localGeneration
     }
-    if (placement.replicationStatus === 'durable') placement.replicationStatus = 'pending'
-    return this.placementRepository.save(placement)
+
+    const now = new Date()
+    const update = {
+      dirty: true,
+      replicationStatus: () => `CASE WHEN "replicationStatus" = 'durable' THEN 'pending' ELSE "replicationStatus" END`,
+      updatedAt: now,
+      ...(input.localGeneration === undefined
+        ? {}
+        : {
+            localGeneration: () => 'GREATEST("localGeneration", CAST(:incomingGeneration AS bigint))',
+          }),
+    }
+    const query = this.placementRepository
+      .createQueryBuilder()
+      .update(WorkspacePlacement)
+      .set(update)
+      .where('id = :placementId', { placementId: input.placementId })
+
+    if (input.ownerNodeId) {
+      query.andWhere('"ownerNodeId" = :ownerNodeId', { ownerNodeId: input.ownerNodeId })
+    }
+    if (input.localGeneration !== undefined) {
+      query.setParameter('incomingGeneration', input.localGeneration)
+    }
+
+    const result = await query.returning('*').execute()
+    const row = result.raw?.[0] as WorkspacePlacement | undefined
+    if (!row) {
+      throw new ConflictException(input.ownerNodeId ? 'workspace_owner_changed' : 'workspace_dirty_update_conflict')
+    }
+    return row
+  }
+
+  async markDirtyByIdentity(input: {
+    volumeId: string
+    sandboxId: string
+    ownerNodeId: string
+    localGeneration?: string
+  }): Promise<WorkspacePlacement> {
+    if (!VOLUME_ID_RE.test(input.volumeId)) throw new BadRequestException('volume_id_invalid')
+    assertUuid(input.sandboxId, 'sandbox_id_invalid')
+    assertUuid(input.ownerNodeId, 'owner_node_id_invalid')
+
+    const placement = await this.placementRepository.findOne({
+      where: { volumeId: input.volumeId, sandboxId: input.sandboxId },
+    })
+    if (!placement) throw new NotFoundException('Workspace placement not found')
+    if (placement.ownerNodeId !== input.ownerNodeId) {
+      throw new ConflictException('workspace_owner_affinity_conflict')
+    }
+
+    return this.markDirty({
+      placementId: placement.id,
+      ownerNodeId: input.ownerNodeId,
+      localGeneration: input.localGeneration,
+    })
   }
 
   async reconcile(input: {

@@ -17,9 +17,11 @@ import (
 	"github.com/daytonaio/runner/internal"
 	"github.com/daytonaio/runner/internal/metrics"
 	"github.com/daytonaio/runner/pkg/api"
+	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
 	"github.com/daytonaio/runner/pkg/cache"
 	"github.com/daytonaio/runner/pkg/daemon"
 	"github.com/daytonaio/runner/pkg/docker"
+	"github.com/daytonaio/runner/pkg/localfirst"
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/daytonaio/runner/pkg/runner/v2/executor"
@@ -141,6 +143,10 @@ func run() int {
 	}
 
 	backupInfoCache := cache.NewBackupInfoCache(ctx, cfg.BackupInfoCacheRetention)
+	var workspaceDirtyNotifier localfirst.DirtyNotifier
+	if cfg.LocalFirstStorageEnabled {
+		workspaceDirtyNotifier = runnerapiclient.NewWorkspaceDirtyClient(cfg.DaytonaApiUrl, cfg.ApiToken)
+	}
 
 	dockerClient, err := docker.NewDockerClient(ctx, docker.DockerClientConfig{
 		ApiClient:                    cli,
@@ -156,6 +162,7 @@ func run() int {
 		LocalFirstStorageEnabled:     cfg.LocalFirstStorageEnabled,
 		LocalStorageRoot:             cfg.LocalStorageRoot,
 		StorageNodeId:                cfg.StorageNodeId,
+		WorkspaceDirtyNotifier:       workspaceDirtyNotifier,
 		DaemonPath:                   daemonPath,
 		ComputerUsePluginPath:        pluginPath,
 		NetRulesManager:              netRulesManager,
@@ -181,6 +188,7 @@ func run() int {
 		logger.Error("Error creating Docker client wrapper", "error", err)
 		return 2
 	}
+	defer dockerClient.CloseLocalFirstWorkspaceWatcher()
 
 	var storageAgent *storageagent.Agent
 	if cfg.LocalFirstStorageEnabled {
