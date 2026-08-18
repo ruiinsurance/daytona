@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	testNodeID    = "11111111-1111-4111-8111-111111111111"
-	testVolumeID  = "22222222-2222-4222-8222-222222222222"
-	testSandboxID = "33333333-3333-4333-8333-333333333333"
-	testOperation = "44444444-4444-4444-8444-444444444444"
+	testNodeID            = "11111111-1111-4111-8111-111111111111"
+	testVolumeID          = "22222222-2222-4222-8222-222222222222"
+	testSandboxID         = "33333333-3333-4333-8333-333333333333"
+	testOperation         = "44444444-4444-4444-8444-444444444444"
+	testConflictOperation = "66666666-6666-4666-8666-666666666666"
 )
 
 func TestCheckpointIsImmutableAndReused(t *testing.T) {
@@ -85,6 +86,12 @@ func TestImportVerifyAndRetainAreIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Target sandbox preparation creates the canonical workspace directory
+	// before the move worker imports its immutable checkpoint.
+	targetWorkspace := filepath.Join(targetRoot, "nodes", targetNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+	if err := os.MkdirAll(targetWorkspace, 0o770); err != nil {
+		t.Fatal(err)
+	}
 
 	importRequest := ImportRequest{
 		OperationID:    testOperation,
@@ -100,6 +107,27 @@ func TestImportVerifyAndRetainAreIdempotent(t *testing.T) {
 	}
 	if err := target.Import(context.Background(), importRequest); err != nil {
 		t.Fatal(err)
+	}
+	conflictingBody := []byte("different")
+	conflictingDigest := sha256.Sum256(conflictingBody)
+	conflictingObjects := []Object{{
+		Key:    "state.db",
+		Body:   conflictingBody,
+		Size:   int64(len(conflictingBody)),
+		SHA256: hex.EncodeToString(conflictingDigest[:]),
+		Mode:   0o660,
+	}}
+	conflictingManifest, err := buildManifest(testVolumeID, testSandboxID, checkpoint.Generation, conflictingObjects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictingRequest := importRequest
+	conflictingRequest.OperationID = testConflictOperation
+	conflictingRequest.LeaseOwner = "move-worker:" + testConflictOperation
+	conflictingRequest.Manifest = conflictingManifest
+	conflictingRequest.Objects = conflictingObjects
+	if Code(target.Import(context.Background(), conflictingRequest)) != "target_workspace_conflict" {
+		t.Fatal("expected non-empty target workspace conflict")
 	}
 	if err := target.Import(context.Background(), importRequest); err != nil {
 		t.Fatal(err)

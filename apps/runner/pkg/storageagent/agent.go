@@ -292,15 +292,23 @@ func (a *Agent) Import(ctx context.Context, request ImportRequest) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if existing, statErr := os.Stat(target); statErr == nil {
-		if !existing.IsDir() {
+	precreatedEmptyTarget := false
+	if existing, statErr := os.Lstat(target); statErr == nil {
+		if existing.Mode()&os.ModeSymlink != 0 || !existing.IsDir() {
 			return newError("target_workspace_invalid", true)
 		}
-		actual, verifyErr := manifestForDirectory(target, request.Manifest)
-		if verifyErr == nil && actual.ContentHash == request.Manifest.ContentHash && actual.ObjectCount == request.Manifest.ObjectCount && actual.Bytes == request.Manifest.Bytes {
-			return nil
+		entries, readErr := os.ReadDir(target)
+		if readErr != nil {
+			return newError("target_workspace_unavailable", false)
 		}
-		return newError("target_workspace_conflict", true)
+		if len(entries) > 0 {
+			actual, verifyErr := manifestForDirectory(target, request.Manifest)
+			if verifyErr == nil && actual.ContentHash == request.Manifest.ContentHash && actual.ObjectCount == request.Manifest.ObjectCount && actual.Bytes == request.Manifest.Bytes {
+				return nil
+			}
+			return newError("target_workspace_conflict", true)
+		}
+		precreatedEmptyTarget = true
 	} else if !isNotFound(statErr) {
 		return newError("target_workspace_unavailable", false)
 	}
@@ -333,6 +341,13 @@ func (a *Agent) Import(ctx context.Context, request ImportRequest) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 		return newError("target_workspace_unavailable", false)
+	}
+	if precreatedEmptyTarget {
+		// Target sandbox preparation may leave an empty mountpoint. Remove only
+		// that verified placeholder; a concurrent writer makes Remove fail.
+		if err := os.Remove(target); err != nil {
+			return newError("target_publish_failed", false)
+		}
 	}
 	if err := os.Rename(staging, target); err != nil {
 		if existing, verifyErr := a.verifyDirectory(target, request.Manifest); verifyErr == nil && existing {
