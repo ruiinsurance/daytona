@@ -17,6 +17,7 @@ import {
   isTerminalMovePhase,
   MovePhase,
 } from '../local-first/workspace-move.contract'
+import { isStorageAgentErrorCode } from '../local-first/storage-agent-error.contract'
 import { WorkspacePlacementService } from './workspace-placement.service'
 
 export interface MoveRuntimeAdapter {
@@ -237,10 +238,11 @@ export class WorkspaceMoveService {
   ): Promise<void> {
     try {
       await action.call(runtime, this.runtimeInput(operation))
-    } catch {
-      operation.errorCode = 'move_phase_failed'
+    } catch (error) {
+      const errorCode = this.phaseErrorCode(error)
+      operation.errorCode = errorCode
       await this.operationRepository.save(operation)
-      throw new Error('move_phase_failed')
+      throw new Error(errorCode)
     }
   }
 
@@ -255,11 +257,16 @@ export class WorkspaceMoveService {
         throw new Error('move_generation_invalid')
       }
       return result
-    } catch {
-      operation.errorCode = 'move_phase_failed'
+    } catch (error) {
+      const errorCode = this.phaseErrorCode(error)
+      operation.errorCode = errorCode
       await this.operationRepository.save(operation)
-      throw new Error('move_phase_failed')
+      throw new Error(errorCode)
     }
+  }
+
+  private phaseErrorCode(error: unknown): string {
+    return error instanceof Error && isStorageAgentErrorCode(error.message) ? error.message : 'move_phase_failed'
   }
 
   private runtimeInput(operation: WorkspaceOperation): MoveRuntimeInput {

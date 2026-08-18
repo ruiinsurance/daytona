@@ -17,6 +17,7 @@ import {
   type ImmutableCheckpointSource,
 } from './workspace-generation.contract'
 import { manifestHash } from './workspace-generation.contract'
+import { isStorageAgentErrorCode } from './storage-agent-error.contract'
 import { WorkspacePlacementService } from '../services/workspace-placement.service'
 import type { MoveRuntimeAdapter, MoveRuntimeInput } from '../services/workspace-move.service'
 
@@ -259,10 +260,7 @@ export class RunnerStorageAgentClient {
         throw new Error('storage_agent_response_invalid')
       }
     } catch (error) {
-      if (
-        error instanceof Error &&
-        /^storage_agent_(?:http_|response_|runner_|payload_|request_)/.test(error.message)
-      ) {
+      if (error instanceof Error && isStorageAgentErrorCode(error.message)) {
         throw error
       }
       throw new Error(controller.signal.aborted ? 'storage_agent_timeout' : 'storage_agent_request_failed')

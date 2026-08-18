@@ -93,6 +93,63 @@ describe('RunnerStorageAgentClient', () => {
     expect(requestBody).not.toHaveProperty('sourcePath')
   })
 
+  it.each([
+    'storage_agent_container_inspect_failed',
+    'storage_agent_mount_prepare_failed',
+    'storage_agent_container_start_failed',
+    'storage_agent_container_readiness_failed',
+    'storage_agent_mount_verification_failed',
+    'storage_agent_start_failed',
+  ])('preserves the fixed Runner start category %s', async (code) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ code }),
+      }),
+    )
+
+    await expect(
+      client().start({
+        nodeId: NODE_ID,
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        lease: {
+          operationId: OPERATION_ID,
+          fenceEpoch: '4',
+          leaseOwner: `move-worker:${OPERATION_ID}`,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    ).rejects.toThrow(code)
+  })
+
+  it('does not expose an unknown Runner error body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        json: async () => ({ code: 'storage_agent_secret_material' }),
+      }),
+    )
+
+    await expect(
+      client().start({
+        nodeId: NODE_ID,
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        lease: {
+          operationId: OPERATION_ID,
+          fenceEpoch: '4',
+          leaseOwner: `move-worker:${OPERATION_ID}`,
+          leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      }),
+    ).rejects.toThrow('storage_agent_request_failed')
+  })
+
   it('rejects a payload whose object hash does not match before it reaches COS', async () => {
     const checkpoint = fixtureCheckpoint()
     vi.stubGlobal(

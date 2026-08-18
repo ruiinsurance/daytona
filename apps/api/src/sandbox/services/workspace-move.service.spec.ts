@@ -291,6 +291,27 @@ describe('WorkspaceMoveService', () => {
     expect(workspacePlacementService.switchOwner).not.toHaveBeenCalled()
   })
 
+  it('persists a fixed Runner start category instead of hiding it as move_phase_failed', async () => {
+    const { service, operations } = makeService()
+    await service.request(request)
+    const runtime = {
+      quiesce: vi.fn(),
+      checkpoint: vi.fn(async () => ({ generation: '4' })),
+      copy: vi.fn(),
+      verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      startTarget: vi.fn(async () => {
+        throw new Error('storage_agent_container_start_failed')
+      }),
+      retainSource: vi.fn(),
+    }
+
+    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('storage_agent_container_start_failed')
+    expect(operations[0]).toMatchObject({
+      phase: 'owner_switched',
+      errorCode: 'storage_agent_container_start_failed',
+    })
+  })
+
   it.each([
     ['quiesce', 'leased'],
     ['checkpoint', 'quiescing'],
