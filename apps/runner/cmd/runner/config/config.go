@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kelseyhightower/envconfig"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 type Config struct {
@@ -262,7 +263,7 @@ func GetBuildLogFilePath(snapshotRef string) (string, error) {
 
 // getOutboundIP returns the IP address of the default route's network interface
 func getOutboundIP() (net.IP, error) {
-	routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
+	routes, err := netlink.RouteList(nil, unix.AF_INET)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list routes: %w", err)
 	}
@@ -277,7 +278,7 @@ func getOutboundIP() (net.IP, error) {
 			}
 
 			// Get addresses for this interface
-			addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
+			addrs, err := netlink.AddrList(link, unix.AF_INET)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get addresses: %w", err)
 			}
