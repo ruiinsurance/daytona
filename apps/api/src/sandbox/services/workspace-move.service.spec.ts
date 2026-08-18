@@ -226,6 +226,8 @@ describe('WorkspaceMoveService', () => {
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
         targetGeneration: '4',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: expect.stringMatching(/^move-worker:/),
       }),
     )
     expect(runtime.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ checkpointGeneration: '4' }))

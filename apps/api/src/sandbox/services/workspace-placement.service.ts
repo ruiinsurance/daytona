@@ -222,6 +222,8 @@ export class WorkspacePlacementService {
     expectedOwnerNodeId: string
     expectedFenceEpoch: number
     expectedLocalGeneration: string
+    operationId: string
+    operationLeaseOwner: string
     targetNodeId: string
     targetGeneration: string
     targetVerified: boolean
@@ -229,6 +231,8 @@ export class WorkspacePlacementService {
   }): Promise<WorkspacePlacement> {
     assertUuid(input.placementId, 'placement_id_invalid')
     assertUuid(input.expectedOwnerNodeId, 'owner_node_id_invalid')
+    assertUuid(input.operationId, 'operation_id_invalid')
+    assertLeaseOwner(input.operationLeaseOwner)
     assertUuid(input.targetNodeId, 'target_node_id_invalid')
     if (!input.targetVerified) throw new ConflictException('target_not_verified')
     if (!Number.isSafeInteger(input.expectedFenceEpoch) || input.expectedFenceEpoch < 0) {
@@ -258,6 +262,30 @@ export class WorkspacePlacementService {
       .andWhere('"ownerNodeId" = :ownerNodeId', { ownerNodeId: input.expectedOwnerNodeId })
       .andWhere('"fenceEpoch" = :fenceEpoch', { fenceEpoch: String(input.expectedFenceEpoch) })
       .andWhere('"localGeneration" = :localGeneration', { localGeneration: input.expectedLocalGeneration })
+      .andWhere(
+        `EXISTS (
+          SELECT 1
+          FROM "workspace_operation" AS operation
+          WHERE operation."id" = :operationId
+            AND operation."placementId" = :placementId
+            AND operation."phase" = 'target_verified'
+            AND operation."leaseOwner" = :operationLeaseOwner
+            AND operation."leaseExpiresAt" > :now
+            AND operation."expectedFenceEpoch" = :operationExpectedFenceEpoch
+            AND operation."sourceNodeId" = :operationSourceNodeId
+            AND operation."targetNodeId" = :operationTargetNodeId
+            AND operation."targetGeneration" = :targetGeneration
+        )`,
+        {
+          operationId: input.operationId,
+          operationLeaseOwner: input.operationLeaseOwner,
+          operationExpectedFenceEpoch: String(input.expectedFenceEpoch),
+          operationSourceNodeId: input.expectedOwnerNodeId,
+          operationTargetNodeId: input.targetNodeId,
+          targetGeneration: input.targetGeneration,
+          now,
+        },
+      )
       .returning('*')
       .execute()
     const row = result.raw?.[0] as WorkspacePlacement | undefined

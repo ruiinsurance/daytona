@@ -196,6 +196,8 @@ export class WorkspaceMoveService {
           expectedOwnerNodeId: operation.sourceNodeId,
           expectedFenceEpoch: expectedFence,
           expectedLocalGeneration: placement.localGeneration,
+          operationId: operation.id,
+          operationLeaseOwner: operation.leaseOwner ?? '',
           targetNodeId: operation.targetNodeId,
           targetGeneration: operation.targetGeneration,
           targetVerified: true,

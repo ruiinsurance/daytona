@@ -6,6 +6,7 @@ const RUNNER_A = '11111111-1111-4111-8111-111111111111'
 const RUNNER_B = '22222222-2222-4222-8222-222222222222'
 const SANDBOX_ID = '33333333-3333-4333-8333-333333333333'
 const PLACEMENT_ID = '44444444-4444-4444-8444-444444444444'
+const OPERATION_ID = '55555555-5555-4555-8555-555555555555'
 const NOW = new Date('2026-08-17T00:00:00.000Z')
 
 function placement(overrides: Partial<WorkspacePlacement> = {}): WorkspacePlacement {
@@ -193,6 +194,8 @@ describe('WorkspacePlacementService', () => {
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
         targetNodeId: RUNNER_B,
         targetGeneration: '4',
         targetVerified: false,
@@ -207,6 +210,8 @@ describe('WorkspacePlacementService', () => {
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
         targetNodeId: RUNNER_B,
         targetGeneration: '4',
         targetVerified: true,
@@ -223,6 +228,10 @@ describe('WorkspacePlacementService', () => {
     expect(query.andWhere).toHaveBeenCalledWith('"ownerNodeId" = :ownerNodeId', { ownerNodeId: RUNNER_A })
     expect(query.andWhere).toHaveBeenCalledWith('"fenceEpoch" = :fenceEpoch', { fenceEpoch: '3' })
     expect(query.andWhere).toHaveBeenCalledWith('"localGeneration" = :localGeneration', { localGeneration: '3' })
+    expect(query.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('"workspace_operation"'),
+      expect.objectContaining({ operationId: OPERATION_ID, operationLeaseOwner: 'move-worker:test', now: NOW }),
+    )
 
     const { repository: staleRepository } = queryRepository([])
     const staleService = new WorkspacePlacementService(staleRepository, {} as any)
@@ -232,6 +241,8 @@ describe('WorkspacePlacementService', () => {
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
         targetNodeId: RUNNER_B,
         targetGeneration: '4',
         targetVerified: true,
@@ -253,6 +264,8 @@ describe('WorkspacePlacementService', () => {
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
         targetNodeId: RUNNER_B,
         targetGeneration: '4',
         targetVerified: true,
@@ -278,6 +291,8 @@ describe('WorkspacePlacementService', () => {
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
         ...generations,
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
         targetNodeId: RUNNER_B,
         targetVerified: true,
         now: NOW,
