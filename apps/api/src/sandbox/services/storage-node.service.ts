@@ -121,9 +121,10 @@ export class StorageNodeService {
       throw new BadRequestException('invalid_storage_node_transition')
     }
     if (
-      nextState === StorageNodeState.REMOVED
-      && node.state !== StorageNodeState.DRAINED
-      && node.state !== StorageNodeState.OFFLINE
+      nextState === StorageNodeState.REMOVED &&
+      node.state !== StorageNodeState.REMOVED &&
+      node.state !== StorageNodeState.DRAINED &&
+      node.state !== StorageNodeState.OFFLINE
     ) {
       throw new ConflictException('storage_node_remove_requires_drained')
     }
@@ -131,10 +132,7 @@ export class StorageNodeService {
       const ownedPlacements = await this.placementRepository.find({ where: { ownerNodeId: node.nodeId } })
       const now = new Date()
       for (const placement of ownedPlacements) {
-        if (
-          placement.leaseOwner
-          && (!placement.leaseExpiresAt || placement.leaseExpiresAt.getTime() > now.getTime())
-        ) {
+        if (placement.leaseOwner && (!placement.leaseExpiresAt || placement.leaseExpiresAt.getTime() > now.getTime())) {
           throw new ConflictException('storage_node_active_lease')
         }
         if (placement.dirty || isGenerationAhead(placement.localGeneration, placement.cosGeneration)) {
@@ -143,15 +141,16 @@ export class StorageNodeService {
       }
       const ownedCount = await this.placementRepository.count({ where: { ownerNodeId: node.nodeId } })
       if (ownedCount > 0) {
-        throw new ConflictException(nextState === StorageNodeState.REMOVED
-          ? 'storage_node_remove_blocked'
-          : 'storage_node_drain_incomplete')
+        throw new ConflictException(
+          nextState === StorageNodeState.REMOVED ? 'storage_node_remove_blocked' : 'storage_node_drain_incomplete',
+        )
       }
       if (this.operationRepository) {
         const operations = await this.operationRepository.find()
-        const pending = operations.some((operation) =>
-          operation.phase !== 'complete'
-          && (operation.sourceNodeId === node.nodeId || operation.targetNodeId === node.nodeId),
+        const pending = operations.some(
+          (operation) =>
+            operation.phase !== 'complete' &&
+            (operation.sourceNodeId === node.nodeId || operation.targetNodeId === node.nodeId),
         )
         if (pending) throw new ConflictException('storage_node_operation_blocked')
       }

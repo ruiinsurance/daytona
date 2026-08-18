@@ -10,9 +10,12 @@ function repositories() {
   const nodes: StorageNode[] = []
   const placements: any[] = []
   const nodeRepository = {
-    findOne: async ({ where }: any) => nodes.find((node) =>
-      (where.nodeId === undefined || node.nodeId === where.nodeId)
-      && (where.runnerId === undefined || node.runnerId === where.runnerId)) ?? null,
+    findOne: async ({ where }: any) =>
+      nodes.find(
+        (node) =>
+          (where.nodeId === undefined || node.nodeId === where.nodeId) &&
+          (where.runnerId === undefined || node.runnerId === where.runnerId),
+      ) ?? null,
     find: async () => nodes,
     create: (value: Partial<StorageNode>) => value as StorageNode,
     save: async (value: StorageNode) => {
@@ -23,10 +26,11 @@ function repositories() {
     },
   }
   const placementRepository = {
-    count: async ({ where }: any = {}) => placements.filter((placement) =>
-      where?.ownerNodeId === undefined || placement.ownerNodeId === where.ownerNodeId).length,
-    find: async ({ where }: any = {}) => placements.filter((placement) =>
-      where?.ownerNodeId === undefined || placement.ownerNodeId === where.ownerNodeId),
+    count: async ({ where }: any = {}) =>
+      placements.filter((placement) => where?.ownerNodeId === undefined || placement.ownerNodeId === where.ownerNodeId)
+        .length,
+    find: async ({ where }: any = {}) =>
+      placements.filter((placement) => where?.ownerNodeId === undefined || placement.ownerNodeId === where.ownerNodeId),
   }
   return {
     nodes,
@@ -76,30 +80,51 @@ describe('StorageNodeService', () => {
     await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
 
     const otherRunnerId = '33333333-3333-4333-8333-333333333333'
-    await expect(service.heartbeat({
-      nodeId: NODE_ID,
-      runnerId: otherRunnerId,
-      capacityBytes: 1000,
-      usedBytes: 0,
-      capacityInodes: 100,
-      usedInodes: 0,
-    })).rejects.toThrow('storage_node_runner_mismatch')
+    await expect(
+      service.heartbeat({
+        nodeId: NODE_ID,
+        runnerId: otherRunnerId,
+        capacityBytes: 1000,
+        usedBytes: 0,
+        capacityInodes: 100,
+        usedInodes: 0,
+      }),
+    ).rejects.toThrow('storage_node_runner_mismatch')
 
-    await expect(service.transition(NODE_ID, StorageNodeState.ACTIVE, otherRunnerId))
-      .rejects.toThrow('storage_node_runner_mismatch')
+    await expect(service.transition(NODE_ID, StorageNodeState.ACTIVE, otherRunnerId)).rejects.toThrow(
+      'storage_node_runner_mismatch',
+    )
   })
 
   it('enforces lifecycle transitions and refuses removal while a workspace is owned', async () => {
     const repos = repositories()
     const service = new StorageNodeService(repos.nodeRepository, repos.placementRepository)
     await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
-    await expect(service.transition(NODE_ID, StorageNodeState.DRAINING)).rejects.toThrow('invalid_storage_node_transition')
+    await expect(service.transition(NODE_ID, StorageNodeState.DRAINING)).rejects.toThrow(
+      'invalid_storage_node_transition',
+    )
     await service.transition(NODE_ID, StorageNodeState.ACTIVE)
     await service.transition(NODE_ID, StorageNodeState.CORDONED)
     await service.transition(NODE_ID, StorageNodeState.DRAINING)
     await service.transition(NODE_ID, StorageNodeState.DRAINED)
     await service.transition(NODE_ID, StorageNodeState.REMOVED)
     expect((await service.findOneOrFail(NODE_ID)).state).toBe(StorageNodeState.REMOVED)
+  })
+
+  it('keeps remove idempotent after a node is already tombstoned', async () => {
+    const repos = repositories()
+    const service = new StorageNodeService(repos.nodeRepository, repos.placementRepository)
+    await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
+    await service.transition(NODE_ID, StorageNodeState.ACTIVE)
+    await service.transition(NODE_ID, StorageNodeState.CORDONED)
+    await service.transition(NODE_ID, StorageNodeState.DRAINING)
+    await service.transition(NODE_ID, StorageNodeState.DRAINED)
+    await service.transition(NODE_ID, StorageNodeState.REMOVED)
+
+    await expect(service.transition(NODE_ID, StorageNodeState.REMOVED)).resolves.toMatchObject({
+      nodeId: NODE_ID,
+      state: StorageNodeState.REMOVED,
+    })
   })
 
   it('selects only active nodes with fresh heartbeat and enough capacity', async () => {
@@ -128,11 +153,13 @@ describe('StorageNodeService', () => {
       usedInodes: 10,
     })
 
-    await expect(service.chooseNode({
-      now: new Date(),
-      requiredBytes: 10,
-      requiredInodes: 1,
-    })).resolves.toMatchObject({ nodeId: secondNode })
+    await expect(
+      service.chooseNode({
+        now: new Date(),
+        requiredBytes: 10,
+        requiredInodes: 1,
+      }),
+    ).resolves.toMatchObject({ nodeId: secondNode })
   })
 
   it('does not treat a stale or offline owner as available for owner affinity', async () => {
@@ -174,20 +201,24 @@ describe('StorageNodeService', () => {
 
   it('refuses drained or removed lifecycle completion while a move operation is pending', async () => {
     const repos = repositories()
-    const operations = [{ phase: 'copying', sourceNodeId: NODE_ID, targetNodeId: '33333333-3333-4333-8333-333333333333' }]
+    const operations = [
+      { phase: 'copying', sourceNodeId: NODE_ID, targetNodeId: '33333333-3333-4333-8333-333333333333' },
+    ]
     const operationRepository = { find: async () => operations }
     const service = new StorageNodeService(repos.nodeRepository, repos.placementRepository, operationRepository as any)
     await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
     await service.transition(NODE_ID, StorageNodeState.ACTIVE)
     await service.transition(NODE_ID, StorageNodeState.CORDONED)
     await service.transition(NODE_ID, StorageNodeState.DRAINING)
-    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED))
-      .rejects.toThrow('storage_node_operation_blocked')
+    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED)).rejects.toThrow(
+      'storage_node_operation_blocked',
+    )
     operations.length = 0
     await service.transition(NODE_ID, StorageNodeState.DRAINED)
     operations.push({ phase: 'copying', sourceNodeId: NODE_ID, targetNodeId: '33333333-3333-4333-8333-333333333333' })
-    await expect(service.transition(NODE_ID, StorageNodeState.REMOVED))
-      .rejects.toThrow('storage_node_operation_blocked')
+    await expect(service.transition(NODE_ID, StorageNodeState.REMOVED)).rejects.toThrow(
+      'storage_node_operation_blocked',
+    )
   })
 
   it('refuses drain completion while a writer lease or local generation is uncommitted', async () => {
@@ -206,22 +237,23 @@ describe('StorageNodeService', () => {
       localGeneration: '1',
       cosGeneration: '1',
     })
-    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED))
-      .rejects.toThrow('storage_node_active_lease')
+    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED)).rejects.toThrow('storage_node_active_lease')
 
     repos.placements[0].leaseOwner = null
     repos.placements[0].leaseExpiresAt = null
     repos.placements[0].dirty = true
     repos.placements[0].localGeneration = '2'
-    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED))
-      .rejects.toThrow('storage_node_uncommitted_generation')
+    await expect(service.transition(NODE_ID, StorageNodeState.DRAINED)).rejects.toThrow(
+      'storage_node_uncommitted_generation',
+    )
   })
 
   it('requires an emptied drained or offline node before removal', async () => {
     const repos = repositories()
     const service = new StorageNodeService(repos.nodeRepository, repos.placementRepository)
     await service.register({ runnerId: RUNNER_ID, nodeId: NODE_ID, capacityBytes: 1000, capacityInodes: 100 })
-    await expect(service.transition(NODE_ID, StorageNodeState.REMOVED))
-      .rejects.toThrow('storage_node_remove_requires_drained')
+    await expect(service.transition(NODE_ID, StorageNodeState.REMOVED)).rejects.toThrow(
+      'storage_node_remove_requires_drained',
+    )
   })
 })
