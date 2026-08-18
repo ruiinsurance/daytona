@@ -328,6 +328,62 @@ describe('WorkspaceGenerationService', () => {
     expect(workspacePlacementService.releaseWriterLease).toHaveBeenCalled()
   })
 
+  it('retains a committed generation when placement persistence fails after latest publish', async () => {
+    const { service, current, generationRows, placementRepository } = setup()
+    placementRepository.save.mockRejectedValueOnce(new Error('placement_database_unavailable'))
+    const snapshot = checkpoint()
+    let latest: string | null = null
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn(async () => snapshot.manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(async () => latest),
+      compareAndSetLatest: vi.fn(async (_workspaceKey: string, expected: string | null, generation: string) => {
+        if (expected !== latest) return false
+        latest = generation
+        return true
+      }),
+    }
+    const source = { create: vi.fn(async () => snapshot) }
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source,
+        store,
+        now: new Date('2026-08-17T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow('generation_persist_failed')
+
+    expect(generationRows[0]).toMatchObject({ generation: '1', state: WorkspaceGenerationState.COMMITTED })
+    expect(current).toMatchObject({
+      localGeneration: '1',
+      cosGeneration: '1',
+      dirty: true,
+      replicationStatus: 'committed',
+    })
+    expect(placementRepository.save).toHaveBeenCalledTimes(2)
+
+    const retrySource = { create: vi.fn() }
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source: retrySource,
+        store,
+        now: new Date('2026-08-17T00:01:00.000Z'),
+      }),
+    ).resolves.toMatchObject({ outcome: 'committed' })
+    expect(current).toMatchObject({
+      localGeneration: '1',
+      cosGeneration: '1',
+      dirty: false,
+      replicationStatus: 'durable',
+    })
+    expect(source.create).toHaveBeenCalledOnce()
+    expect(retrySource.create).not.toHaveBeenCalled()
+  })
+
   it('retains the checkpoint operation id across a source crash and retry', async () => {
     const { service, generationRows } = setup()
     let fail = true

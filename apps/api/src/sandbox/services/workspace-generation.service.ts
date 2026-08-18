@@ -32,6 +32,7 @@ import {
 import { LOCAL_FIRST_GENERATION_PREFIX } from '../local-first/workspace-generation.tokens'
 
 const FIXED_UPLOAD_ERROR = 'generation_upload_failed'
+const FIXED_PERSIST_ERROR = 'generation_persist_failed'
 
 @Injectable()
 export class WorkspaceGenerationService {
@@ -154,6 +155,8 @@ export class WorkspaceGenerationService {
       generation.errorCode = null
       await this.generationRepository.save(generation)
 
+      let objectStoreCommitted = false
+      let latestPublished = false
       try {
         generation.state = WorkspaceGenerationState.UPLOADING
         await this.generationRepository.save(generation)
@@ -165,9 +168,10 @@ export class WorkspaceGenerationService {
         const readBack = await input.store.readManifest(workspaceKey, nextGeneration)
         assertManifestMatches(checkpoint.manifest, readBack)
         await input.store.putCommittedMarker(workspaceKey, checkpoint.manifest)
+        objectStoreCommitted = true
 
         const expectedLatest = await input.store.getLatest(workspaceKey)
-        const latestPublished = await input.store.compareAndSetLatest(workspaceKey, expectedLatest, nextGeneration)
+        latestPublished = await input.store.compareAndSetLatest(workspaceKey, expectedLatest, nextGeneration)
 
         generation.state = WorkspaceGenerationState.COMMITTED
         generation.committedAt = input.now ?? new Date()
@@ -183,6 +187,25 @@ export class WorkspaceGenerationService {
           generation,
         }
       } catch {
+        if (objectStoreCommitted) {
+          generation.state = WorkspaceGenerationState.COMMITTED
+          generation.errorCode = null
+          generation.committedAt = generation.committedAt ?? input.now ?? new Date()
+          try {
+            await this.generationRepository.save(generation)
+          } catch {
+            // Keep the fixed error category below; the immutable object-store
+            // commit remains the recovery source even if this write is ambiguous.
+          }
+          placement.dirty = true
+          placement.replicationStatus = 'committed'
+          try {
+            await this.placementRepository.save(placement)
+          } catch {
+            // The reconciler will retry from the committed generation row.
+          }
+          throw new Error(FIXED_PERSIST_ERROR)
+        }
         generation.state = WorkspaceGenerationState.FAILED
         generation.errorCode = FIXED_UPLOAD_ERROR
         await this.generationRepository.save(generation)
