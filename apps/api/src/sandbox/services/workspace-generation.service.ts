@@ -115,6 +115,13 @@ export class WorkspaceGenerationService {
     }
 
     const checkpointLease = await this.acquireCheckpointLease(placement, input.now ?? new Date())
+    // The lease is acquired with a conditional SQL update and may be returned
+    // as a different entity instance. Carry its authoritative identity into
+    // every later placement save so replication state cannot clear the writer
+    // fence while the immutable checkpoint is still being published.
+    placement.fenceEpoch = checkpointLease.fenceEpoch
+    placement.leaseOwner = checkpointLease.leaseOwner
+    placement.leaseExpiresAt = new Date(checkpointLease.leaseExpiresAt)
     let generation: WorkspaceGeneration
     try {
       generation = await this.prepareGenerationIntent(

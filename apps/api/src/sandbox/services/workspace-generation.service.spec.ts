@@ -187,6 +187,45 @@ describe('WorkspaceGenerationService', () => {
     expect(generationRows[0].manifestHash).toBe(manifestHash(snapshot.manifest))
   })
 
+  it('persists the authoritative writer lease with placement replication state', async () => {
+    const { service, current, placementRepository, workspacePlacementService } = setup()
+    const savedPlacements: any[] = []
+    placementRepository.save.mockImplementation(async (value) => {
+      savedPlacements.push(structuredClone(value))
+      return value
+    })
+    const leaseExpiresAt = new Date('2026-08-17T00:10:00.000Z')
+    workspacePlacementService.acquireWriterLease.mockImplementationOnce(async (input) => ({
+      ...current,
+      leaseOwner: input.leaseOwner,
+      leaseExpiresAt,
+      fenceEpoch: '1',
+    }))
+    const snapshot = checkpoint()
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn(async () => snapshot.manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(async () => null),
+      compareAndSetLatest: vi.fn(async () => true),
+    }
+
+    await service.reconcile({
+      placementId: PLACEMENT_ID,
+      source: { create: vi.fn(async () => snapshot) },
+      store,
+      now: new Date('2026-08-17T00:00:00.000Z'),
+    })
+
+    const savedLeaseOwner = savedPlacements.at(-1)?.leaseOwner
+    expect(savedLeaseOwner).toMatch(/^generation-worker:/)
+    expect(savedPlacements.at(-1)).toMatchObject({ leaseExpiresAt })
+    expect(workspacePlacementService.releaseWriterLease).toHaveBeenCalledWith(
+      expect.objectContaining({ leaseOwner: savedLeaseOwner }),
+    )
+  })
+
   it('retains failed generations and never advances latest after partial upload', async () => {
     const { service, current, generationRows } = setup()
     const events: string[] = []
