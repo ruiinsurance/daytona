@@ -183,7 +183,8 @@ export class WorkspaceMoveService {
       // lease immediately before sending the target-side evidence so the
       // storage agent cannot reject a valid move because earlier phases used
       // most of the original lease window.
-      operation = await this.claimLease(operation, new Date())
+      const refreshedAt = new Date()
+      operation = await this.claimLease(operation, refreshedAt)
       await this.runPhaseAction(operation, runtime.prepareTarget, runtime)
       const placement = await this.placementRepository.findOne({ where: { id: operation.placementId } })
       if (!placement) throw new NotFoundException('Workspace placement not found')
@@ -212,7 +213,7 @@ export class WorkspaceMoveService {
             targetNodeId: operation.targetNodeId,
             targetGeneration: operation.targetGeneration,
             targetVerified: true,
-            now,
+            now: refreshedAt,
           })
         } catch (error) {
           const errorCode = this.phaseErrorCode(error)

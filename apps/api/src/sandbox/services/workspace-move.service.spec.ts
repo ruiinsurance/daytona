@@ -248,6 +248,36 @@ describe('WorkspaceMoveService', () => {
     expect(operations[0].phase).toBe('complete')
   })
 
+  it('uses the refreshed operation lease time for the owner CAS', async () => {
+    vi.useFakeTimers()
+    try {
+      const { service, workspacePlacementService } = makeService()
+      await service.request(request)
+      const refreshedAt = new Date('2026-08-19T07:30:00.000Z')
+      vi.setSystemTime(refreshedAt)
+      const switchOwnerInput = vi.fn()
+      workspacePlacementService.switchOwner.mockImplementation(async (input: any) => {
+        switchOwnerInput(input)
+        return { ownerNodeId: TARGET_NODE_ID, fenceEpoch: '4' }
+      })
+      const runtime = {
+        quiesce: vi.fn(),
+        checkpoint: vi.fn(async () => ({ generation: '4' })),
+        copy: vi.fn(),
+        verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+        prepareTarget: vi.fn(),
+        startTarget: vi.fn(),
+        retainSource: vi.fn(),
+      }
+
+      await service.run(OPERATION_ID, runtime as any, new Date('2026-08-17T00:00:00.000Z'))
+
+      expect(switchOwnerInput).toHaveBeenCalledWith(expect.objectContaining({ now: refreshedAt }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the source owner when target preparation fails after verification', async () => {
     const { service, operations, workspacePlacementService } = makeService()
     await service.request(request)
