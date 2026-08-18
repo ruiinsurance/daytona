@@ -8,6 +8,7 @@ import { cp, lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from
 import { join, relative, resolve } from 'node:path'
 import {
   checkpointContentHash,
+  compareCheckpointObjectKeys,
   ImmutableCheckpoint,
   ImmutableCheckpointSource,
   CheckpointObject,
@@ -135,7 +136,7 @@ async function makeReadOnly(root: string): Promise<void> {
 async function collectObjects(root: string): Promise<CheckpointObject[]> {
   const objects: CheckpointObject[] = []
   await walk(root, root, objects)
-  objects.sort((left, right) => left.key.localeCompare(right.key))
+  objects.sort(compareCheckpointObjectKeys)
   return objects
 }
 

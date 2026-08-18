@@ -90,24 +90,28 @@ export function manifestHash(manifest: GenerationManifest): string {
 
 export function checkpointContentHash(objects: readonly CheckpointObject[]): string {
   const digest = createHash('sha256')
-  for (const object of [...objects].sort((left, right) => left.key.localeCompare(right.key))) {
+  for (const object of [...objects].sort(compareCheckpointObjectKeys)) {
     digest.update(object.key)
     digest.update(object.sha256)
   }
   return digest.digest('hex')
 }
 
+export function compareCheckpointObjectKeys(left: CheckpointObject, right: CheckpointObject): number {
+  return left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+}
+
 export function assertManifestMatches(expected: GenerationManifest, actual: GenerationManifest): void {
   if (
-    expected.formatVersion !== actual.formatVersion
-    || expected.volumeId !== actual.volumeId
-    || expected.sandboxId !== actual.sandboxId
-    || expected.generation !== actual.generation
-    || expected.objectCount !== actual.objectCount
-    || expected.bytes !== actual.bytes
-    || expected.contentHash !== actual.contentHash
-    || expected.createdAt !== actual.createdAt
-    || manifestHash(expected) !== manifestHash(actual)
+    expected.formatVersion !== actual.formatVersion ||
+    expected.volumeId !== actual.volumeId ||
+    expected.sandboxId !== actual.sandboxId ||
+    expected.generation !== actual.generation ||
+    expected.objectCount !== actual.objectCount ||
+    expected.bytes !== actual.bytes ||
+    expected.contentHash !== actual.contentHash ||
+    expected.createdAt !== actual.createdAt ||
+    manifestHash(expected) !== manifestHash(actual)
   ) {
     throw new Error('generation_manifest_mismatch')
   }
@@ -126,10 +130,10 @@ export function chooseRecoverySource(input: {
   const local = BigInt(input.localGeneration)
   const cos = BigInt(input.cosGeneration)
   if (
-    input.latestCommittedGeneration !== null
-    && DECIMAL_RE.test(input.latestCommittedGeneration)
-    && BigInt(input.latestCommittedGeneration) >= local
-    && cos >= local
+    input.latestCommittedGeneration !== null &&
+    DECIMAL_RE.test(input.latestCommittedGeneration) &&
+    BigInt(input.latestCommittedGeneration) >= local &&
+    cos >= local
   ) {
     return 'cos'
   }
