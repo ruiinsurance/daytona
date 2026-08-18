@@ -179,17 +179,29 @@ export class WorkspaceMoveService {
       if (!placement) throw new NotFoundException('Workspace placement not found')
       const expectedFence = Number(operation.expectedFenceEpoch)
       const alreadySwitched =
-        placement.ownerNodeId === operation.targetNodeId && Number(placement.fenceEpoch) === expectedFence + 1
-      const switched = alreadySwitched
-        ? placement
-        : await this.workspacePlacementService.switchOwner({
-            placementId: operation.placementId,
-            expectedOwnerNodeId: operation.sourceNodeId,
-            expectedFenceEpoch: expectedFence,
-            targetNodeId: operation.targetNodeId,
-            targetVerified: true,
-            now,
-          })
+        placement.ownerNodeId === operation.targetNodeId &&
+        Number(placement.fenceEpoch) === expectedFence + 1 &&
+        placement.localGeneration === operation.targetGeneration
+      let switched: WorkspacePlacement
+      if (alreadySwitched) {
+        switched = placement
+      } else {
+        if (!operation.targetGeneration) {
+          operation.errorCode = 'move_generation_invalid'
+          await this.operationRepository.save(operation)
+          throw new Error('move_generation_invalid')
+        }
+        switched = await this.workspacePlacementService.switchOwner({
+          placementId: operation.placementId,
+          expectedOwnerNodeId: operation.sourceNodeId,
+          expectedFenceEpoch: expectedFence,
+          expectedLocalGeneration: placement.localGeneration,
+          targetNodeId: operation.targetNodeId,
+          targetGeneration: operation.targetGeneration,
+          targetVerified: true,
+          now,
+        })
+      }
       operation.switchedFenceEpoch = String(switched.fenceEpoch)
       operation = await this.operationRepository.save(operation)
       operation = await this.persistPhase(operation, 'owner_switched', now)

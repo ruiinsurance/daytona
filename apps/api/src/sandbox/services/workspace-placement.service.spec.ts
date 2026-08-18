@@ -192,7 +192,9 @@ describe('WorkspacePlacementService', () => {
         placementId: PLACEMENT_ID,
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
         targetNodeId: RUNNER_B,
+        targetGeneration: '4',
         targetVerified: false,
         now: NOW,
       }),
@@ -204,7 +206,9 @@ describe('WorkspacePlacementService', () => {
         placementId: PLACEMENT_ID,
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
         targetNodeId: RUNNER_B,
+        targetGeneration: '4',
         targetVerified: true,
         now: NOW,
       }),
@@ -218,6 +222,7 @@ describe('WorkspacePlacementService', () => {
     )
     expect(query.andWhere).toHaveBeenCalledWith('"ownerNodeId" = :ownerNodeId', { ownerNodeId: RUNNER_A })
     expect(query.andWhere).toHaveBeenCalledWith('"fenceEpoch" = :fenceEpoch', { fenceEpoch: '3' })
+    expect(query.andWhere).toHaveBeenCalledWith('"localGeneration" = :localGeneration', { localGeneration: '3' })
 
     const { repository: staleRepository } = queryRepository([])
     const staleService = new WorkspacePlacementService(staleRepository, {} as any)
@@ -226,11 +231,59 @@ describe('WorkspacePlacementService', () => {
         placementId: PLACEMENT_ID,
         expectedOwnerNodeId: RUNNER_A,
         expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
         targetNodeId: RUNNER_B,
+        targetGeneration: '4',
         targetVerified: true,
         now: NOW,
       }),
     ).rejects.toThrow('workspace_owner_cas_miss')
+  })
+
+  it('advances local generation in the same verified owner CAS', async () => {
+    const current = placement({ localGeneration: '3' })
+    const { repository, query } = queryRepository([
+      { ...current, ownerNodeId: RUNNER_B, fenceEpoch: '4', localGeneration: '4' },
+    ])
+    const service = new WorkspacePlacementService(repository, {} as any)
+
+    await expect(
+      service.switchOwner({
+        placementId: PLACEMENT_ID,
+        expectedOwnerNodeId: RUNNER_A,
+        expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
+        targetNodeId: RUNNER_B,
+        targetGeneration: '4',
+        targetVerified: true,
+        now: NOW,
+      } as any),
+    ).resolves.toMatchObject({ ownerNodeId: RUNNER_B, fenceEpoch: '4', localGeneration: '4' })
+    expect(query.set).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerNodeId: RUNNER_B, localGeneration: '4', dirty: true }),
+    )
+    expect(query.andWhere).toHaveBeenCalledWith('"localGeneration" = :localGeneration', { localGeneration: '3' })
+  })
+
+  it.each([
+    { expectedLocalGeneration: '3', targetGeneration: '3' },
+    { expectedLocalGeneration: '03', targetGeneration: '4' },
+  ])('rejects a non-advancing or non-canonical target generation: %o', async (generations) => {
+    const { repository, query } = queryRepository([])
+    const service = new WorkspacePlacementService(repository, {} as any)
+
+    await expect(
+      service.switchOwner({
+        placementId: PLACEMENT_ID,
+        expectedOwnerNodeId: RUNNER_A,
+        expectedFenceEpoch: 3,
+        ...generations,
+        targetNodeId: RUNNER_B,
+        targetVerified: true,
+        now: NOW,
+      } as any),
+    ).rejects.toThrow('workspace_generation_conflict')
+    expect(query.execute).not.toHaveBeenCalled()
   })
 
   it('releases only the exact placement lease owner and fence', async () => {

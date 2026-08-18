@@ -8,6 +8,7 @@ import { chooseRecoverySource } from '../local-first/workspace-generation.contra
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const VOLUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const DECIMAL_RE = /^(0|[1-9][0-9]*)$/
 
 @Injectable()
 export class WorkspacePlacementService {
@@ -220,7 +221,9 @@ export class WorkspacePlacementService {
     placementId: string
     expectedOwnerNodeId: string
     expectedFenceEpoch: number
+    expectedLocalGeneration: string
     targetNodeId: string
+    targetGeneration: string
     targetVerified: boolean
     now?: Date
   }): Promise<WorkspacePlacement> {
@@ -231,6 +234,13 @@ export class WorkspacePlacementService {
     if (!Number.isSafeInteger(input.expectedFenceEpoch) || input.expectedFenceEpoch < 0) {
       throw new BadRequestException('workspace_fence_invalid')
     }
+    if (
+      !DECIMAL_RE.test(input.expectedLocalGeneration) ||
+      !DECIMAL_RE.test(input.targetGeneration) ||
+      BigInt(input.targetGeneration) <= BigInt(input.expectedLocalGeneration)
+    ) {
+      throw new ConflictException('workspace_generation_conflict')
+    }
     const now = input.now ?? new Date()
     const result = await this.placementRepository
       .createQueryBuilder()
@@ -238,6 +248,8 @@ export class WorkspacePlacementService {
       .set({
         ownerNodeId: input.targetNodeId,
         fenceEpoch: () => '"fenceEpoch" + 1',
+        localGeneration: input.targetGeneration,
+        dirty: true,
         leaseOwner: null,
         leaseExpiresAt: null,
         updatedAt: now,
@@ -245,6 +257,7 @@ export class WorkspacePlacementService {
       .where('id = :placementId', { placementId: input.placementId })
       .andWhere('"ownerNodeId" = :ownerNodeId', { ownerNodeId: input.expectedOwnerNodeId })
       .andWhere('"fenceEpoch" = :fenceEpoch', { fenceEpoch: String(input.expectedFenceEpoch) })
+      .andWhere('"localGeneration" = :localGeneration', { localGeneration: input.expectedLocalGeneration })
       .returning('*')
       .execute()
     const row = result.raw?.[0] as WorkspacePlacement | undefined

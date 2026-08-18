@@ -224,6 +224,8 @@ describe('WorkspaceMoveService', () => {
       expect.objectContaining({
         targetVerified: true,
         expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
+        targetGeneration: '4',
       }),
     )
     expect(runtime.checkpoint).toHaveBeenCalledWith(expect.objectContaining({ checkpointGeneration: '4' }))
