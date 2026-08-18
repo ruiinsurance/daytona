@@ -521,6 +521,94 @@ describe('WorkspaceGenerationService', () => {
     expect(current.replicationStatus).toBe('durable')
   })
 
+  it('does not regress local generation when a committed retry observes newer latest', async () => {
+    const { service, current, generationRows, generationRepository } = setup()
+    current.localGeneration = '1'
+    current.cosGeneration = '1'
+    const committed = generationRepository.create({
+      placementId: PLACEMENT_ID,
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      generation: '2',
+      state: WorkspaceGenerationState.COMMITTED,
+      sourcePath: 'runner-local-first:test-node',
+      manifestHash: 'a'.repeat(64),
+      objectCount: '1',
+      bytes: '5',
+      manifest: {},
+      errorCode: null,
+      committedAt: new Date('2026-08-17T00:00:00.000Z'),
+    })
+    generationRows.push(committed)
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn(),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn().mockResolvedValue('3'),
+      compareAndSetLatest: vi.fn(),
+    }
+
+    await expect(
+      service.reconcile({ placementId: PLACEMENT_ID, source: { create: vi.fn() }, store }),
+    ).resolves.toMatchObject({
+      outcome: 'committed',
+      generation: committed,
+    })
+
+    expect(current.localGeneration).toBe('3')
+    expect(current.cosGeneration).toBe('3')
+    expect(current.dirty).toBe(false)
+    expect(store.compareAndSetLatest).not.toHaveBeenCalled()
+  })
+
+  it('keeps a newer local dirty generation visible during an older committed retry', async () => {
+    const { service, current, generationRows, generationRepository } = setup()
+    current.localGeneration = '1'
+    current.cosGeneration = '1'
+    const committed = generationRepository.create({
+      placementId: PLACEMENT_ID,
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      generation: '2',
+      state: WorkspaceGenerationState.COMMITTED,
+      sourcePath: 'runner-local-first:test-node',
+      manifestHash: 'a'.repeat(64),
+      objectCount: '1',
+      bytes: '5',
+      manifest: {},
+      errorCode: null,
+      committedAt: new Date('2026-08-17T00:00:00.000Z'),
+    })
+    generationRows.push(committed)
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn(),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(async () => {
+        current.localGeneration = '8'
+        current.cosGeneration = '7'
+        return '3'
+      }),
+      compareAndSetLatest: vi.fn(),
+    }
+
+    await expect(
+      service.reconcile({ placementId: PLACEMENT_ID, source: { create: vi.fn() }, store }),
+    ).resolves.toMatchObject({
+      outcome: 'committed',
+      generation: committed,
+    })
+
+    expect(current).toMatchObject({
+      localGeneration: '8',
+      cosGeneration: '7',
+      dirty: true,
+      replicationStatus: 'committed',
+    })
+  })
+
   it('fails closed when the owner is lost and COS is behind local state', () => {
     expect(
       chooseRecoverySource({

@@ -352,23 +352,32 @@ export class WorkspaceGenerationService {
     if (!latestPublished && latest !== null && BigInt(latest) > BigInt(input.generation)) {
       // A concurrent worker has already published a newer committed generation.
       // Never move latest backwards; the local placement can safely observe it.
-      input.placement.cosGeneration = latest
       latestPublished = true
     }
     if (!latestPublished) {
       latestPublished = await input.store.compareAndSetLatest(input.workspaceKey, latest, input.generation)
     }
 
-    input.placement.localGeneration = input.generation
-    if (
-      latestPublished &&
-      input.placement.cosGeneration !== latest &&
-      input.placement.cosGeneration !== input.generation
-    ) {
-      input.placement.cosGeneration = input.generation
-    }
-    input.placement.dirty = !latestPublished
-    input.placement.replicationStatus = latestPublished ? 'durable' : 'committed'
+    const observedLatest = latest === null ? BigInt(input.generation) : BigInt(latest)
+    const currentLocalGeneration = BigInt(input.placement.localGeneration || '0')
+    const currentCosGeneration = BigInt(input.placement.cosGeneration || '0')
+    const publishedLocalGeneration = latestPublished
+      ? currentLocalGeneration > observedLatest
+        ? currentLocalGeneration
+        : observedLatest
+      : currentLocalGeneration > BigInt(input.generation)
+        ? currentLocalGeneration
+        : BigInt(input.generation)
+    const publishedCosGeneration = latestPublished
+      ? currentCosGeneration > observedLatest
+        ? currentCosGeneration
+        : observedLatest
+      : currentCosGeneration
+
+    input.placement.localGeneration = publishedLocalGeneration.toString()
+    input.placement.cosGeneration = publishedCosGeneration.toString()
+    input.placement.dirty = !latestPublished || publishedLocalGeneration > publishedCosGeneration
+    input.placement.replicationStatus = input.placement.dirty ? 'committed' : 'durable'
     await this.placementRepository.save(input.placement)
     return {
       outcome: latestPublished ? 'committed' : 'committed_pending_latest',
