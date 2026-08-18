@@ -178,16 +178,22 @@ export class WorkspaceGenerationService {
         objectStoreCommitted = true
 
         const expectedLatest = await input.store.getLatest(workspaceKey)
-        latestPublished = await input.store.compareAndSetLatest(workspaceKey, expectedLatest, nextGeneration)
+        const expectedLatestGeneration = expectedLatest === null ? null : BigInt(expectedLatest)
+        latestPublished =
+          expectedLatestGeneration !== null && expectedLatestGeneration >= BigInt(nextGeneration)
+            ? true
+            : await input.store.compareAndSetLatest(workspaceKey, expectedLatest, nextGeneration)
 
         generation.state = WorkspaceGenerationState.COMMITTED
         generation.committedAt = input.now ?? new Date()
         await this.generationRepository.save(generation)
 
-        placement.localGeneration = nextGeneration
-        placement.cosGeneration = nextGeneration
-        placement.dirty = !latestPublished
-        placement.replicationStatus = latestPublished ? 'durable' : 'committed'
+        this.applyCommittedPlacementState({
+          placement,
+          generation: nextGeneration,
+          latest: expectedLatest,
+          latestPublished,
+        })
         await this.placementRepository.save(placement)
         return {
           outcome: latestPublished ? 'committed' : 'committed_pending_latest',
@@ -336,6 +342,26 @@ export class WorkspaceGenerationService {
     return chooseRecoverySource(input)
   }
 
+  private applyCommittedPlacementState(input: {
+    placement: WorkspacePlacement
+    generation: string
+    latest: string | null
+    latestPublished: boolean
+  }): void {
+    const generation = BigInt(input.generation)
+    const latest = input.latest === null ? generation : BigInt(input.latest)
+    const observedGeneration = latest > generation ? latest : generation
+    const currentLocalGeneration = BigInt(input.placement.localGeneration || '0')
+    const currentCosGeneration = BigInt(input.placement.cosGeneration || '0')
+    const localGeneration = currentLocalGeneration > observedGeneration ? currentLocalGeneration : observedGeneration
+    const cosGeneration = currentCosGeneration > observedGeneration ? currentCosGeneration : observedGeneration
+
+    input.placement.localGeneration = localGeneration.toString()
+    input.placement.cosGeneration = cosGeneration.toString()
+    input.placement.dirty = !input.latestPublished || localGeneration > cosGeneration
+    input.placement.replicationStatus = input.placement.dirty ? 'committed' : 'durable'
+  }
+
   private async publishCommittedLatest(input: {
     placement: WorkspacePlacement
     generation: string
@@ -358,26 +384,12 @@ export class WorkspaceGenerationService {
       latestPublished = await input.store.compareAndSetLatest(input.workspaceKey, latest, input.generation)
     }
 
-    const observedLatest = latest === null ? BigInt(input.generation) : BigInt(latest)
-    const currentLocalGeneration = BigInt(input.placement.localGeneration || '0')
-    const currentCosGeneration = BigInt(input.placement.cosGeneration || '0')
-    const publishedLocalGeneration = latestPublished
-      ? currentLocalGeneration > observedLatest
-        ? currentLocalGeneration
-        : observedLatest
-      : currentLocalGeneration > BigInt(input.generation)
-        ? currentLocalGeneration
-        : BigInt(input.generation)
-    const publishedCosGeneration = latestPublished
-      ? currentCosGeneration > observedLatest
-        ? currentCosGeneration
-        : observedLatest
-      : currentCosGeneration
-
-    input.placement.localGeneration = publishedLocalGeneration.toString()
-    input.placement.cosGeneration = publishedCosGeneration.toString()
-    input.placement.dirty = !latestPublished || publishedLocalGeneration > publishedCosGeneration
-    input.placement.replicationStatus = input.placement.dirty ? 'committed' : 'durable'
+    this.applyCommittedPlacementState({
+      placement: input.placement,
+      generation: input.generation,
+      latest,
+      latestPublished,
+    })
     await this.placementRepository.save(input.placement)
     return {
       outcome: latestPublished ? 'committed' : 'committed_pending_latest',

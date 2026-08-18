@@ -187,6 +187,39 @@ describe('WorkspaceGenerationService', () => {
     expect(generationRows[0].manifestHash).toBe(manifestHash(snapshot.manifest))
   })
 
+  it('does not regress placement generations when latest CAS loses to a newer worker', async () => {
+    const { service, current } = setup()
+    const snapshot = checkpoint()
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn(async () => snapshot.manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn(async () => {
+        current.localGeneration = '8'
+        current.cosGeneration = '7'
+        return '3'
+      }),
+      compareAndSetLatest: vi.fn().mockResolvedValue(false),
+    }
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source: { create: vi.fn(async () => snapshot) },
+        store,
+      }),
+    ).resolves.toMatchObject({ outcome: 'committed' })
+
+    expect(current).toMatchObject({
+      localGeneration: '8',
+      cosGeneration: '7',
+      dirty: true,
+      replicationStatus: 'committed',
+    })
+    expect(store.compareAndSetLatest).not.toHaveBeenCalled()
+  })
+
   it('persists the authoritative writer lease with placement replication state', async () => {
     const { service, current, placementRepository, workspacePlacementService } = setup()
     const savedPlacements: any[] = []
