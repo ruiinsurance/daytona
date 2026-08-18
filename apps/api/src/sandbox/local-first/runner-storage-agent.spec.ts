@@ -15,6 +15,7 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111'
 const VOLUME_ID = '22222222-2222-4222-8222-222222222222'
 const SANDBOX_ID = '33333333-3333-4333-8333-333333333333'
 const OPERATION_ID = '44444444-4444-4444-8444-444444444444'
+const LEASE_EXPIRES_AT = new Date('2099-01-01T00:00:00.000Z')
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -318,6 +319,35 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     expect(agentClient.checkpoint).not.toHaveBeenCalled()
   })
 
+  it.each([null, new Date('invalid')])(
+    'fails closed when the move operation has no valid authoritative lease expiry',
+    async (leaseExpiresAt) => {
+      const agentClient = { quiesce: vi.fn() }
+      const runtime = new RunnerStorageAgentMoveRuntime(agentClient as any, {} as any)
+      const operation = {
+        id: OPERATION_ID,
+        placementId: '55555555-5555-4555-8555-555555555555',
+        volumeId: VOLUME_ID,
+        sandboxId: SANDBOX_ID,
+        sourceNodeId: NODE_ID,
+        targetNodeId: '66666666-6666-4666-8666-666666666666',
+        expectedFenceEpoch: '4',
+        leaseOwner: `move-worker:test:${OPERATION_ID}`,
+        leaseExpiresAt,
+      }
+
+      await expect(
+        runtime.quiesce({
+          operation,
+          fenceEpoch: '4',
+          checkpointGeneration: '7',
+          targetGeneration: null,
+        } as any),
+      ).rejects.toThrow('workspace_lease_invalid')
+      expect(agentClient.quiesce).not.toHaveBeenCalled()
+    },
+  )
+
   it('runs quiesce, checkpoint, copy, target verification, fenced start, and retention', async () => {
     const checkpoint = fixtureCheckpoint()
     const agentClient = {
@@ -342,6 +372,7 @@ describe('RunnerStorageAgentMoveRuntime', () => {
       targetNodeId: '66666666-6666-4666-8666-666666666666',
       expectedFenceEpoch: '4',
       leaseOwner: `move-worker:test:${OPERATION_ID}`,
+      leaseExpiresAt: LEASE_EXPIRES_AT,
     }
     const input = { operation, fenceEpoch: '5', checkpointGeneration: '7', targetGeneration: null } as any
 
@@ -356,13 +387,37 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     await runtime.retainSource({ ...input, checkpointGeneration: '7' })
 
     expect(agentClient.quiesce).toHaveBeenCalled()
+    expect(agentClient.quiesce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lease: expect.objectContaining({ leaseExpiresAt: LEASE_EXPIRES_AT.toISOString() }),
+      }),
+    )
     expect(agentClient.fence).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: operation.sourceNodeId,
-        lease: expect.objectContaining({ fenceEpoch: '5' }),
+        lease: expect.objectContaining({
+          fenceEpoch: '5',
+          leaseExpiresAt: LEASE_EXPIRES_AT.toISOString(),
+        }),
       }),
     )
-    expect(agentClient.import).toHaveBeenCalledWith(expect.objectContaining({ nodeId: operation.targetNodeId }))
+    expect(agentClient.checkpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lease: expect.objectContaining({ leaseExpiresAt: LEASE_EXPIRES_AT.toISOString() }),
+      }),
+    )
+    expect(agentClient.import).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: operation.targetNodeId,
+        lease: expect.objectContaining({ leaseExpiresAt: LEASE_EXPIRES_AT.toISOString() }),
+      }),
+    )
+    expect(agentClient.verify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: operation.targetNodeId,
+        lease: expect.objectContaining({ leaseExpiresAt: LEASE_EXPIRES_AT.toISOString() }),
+      }),
+    )
     expect(placementService.acquireWriterLease).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: operation.targetNodeId,
@@ -373,7 +428,10 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     expect(agentClient.retain).toHaveBeenCalled()
     expect(agentClient.retain).toHaveBeenCalledWith(
       expect.objectContaining({
-        lease: expect.objectContaining({ fenceEpoch: '5' }),
+        lease: expect.objectContaining({
+          fenceEpoch: '5',
+          leaseExpiresAt: LEASE_EXPIRES_AT.toISOString(),
+        }),
       }),
     )
   })

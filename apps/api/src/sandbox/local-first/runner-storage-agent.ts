@@ -498,14 +498,25 @@ export class RunnerStorageAgentMoveRuntime implements MoveRuntimeAdapter {
       operationId: input.operation.id,
       fenceEpoch,
       leaseOwner: input.operation.leaseOwner,
-      leaseExpiresAt,
+      leaseExpiresAt: leaseExpiresAt ?? normaliseLeaseExpiry(input.operation.leaseExpiresAt),
     })
   }
 }
 
+function normaliseLeaseExpiry(value: Date | null): string | undefined {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) return undefined
+  return value.toISOString()
+}
+
 function buildLease(input: Omit<AgentLease, 'leaseExpiresAt'> & { leaseExpiresAt?: string }): AgentLease {
-  const leaseExpiresAt = input.leaseExpiresAt ?? new Date(Date.now() + 60_000).toISOString()
-  if (!UUID_RE.test(input.operationId) || !DECIMAL_RE.test(input.fenceEpoch) || !input.leaseOwner || !leaseExpiresAt) {
+  const leaseExpiresAt = input.leaseExpiresAt
+  if (
+    !UUID_RE.test(input.operationId) ||
+    !DECIMAL_RE.test(input.fenceEpoch) ||
+    !input.leaseOwner ||
+    !leaseExpiresAt ||
+    !Number.isFinite(Date.parse(leaseExpiresAt))
+  ) {
     throw new Error('workspace_lease_invalid')
   }
   return { ...input, leaseExpiresAt }
