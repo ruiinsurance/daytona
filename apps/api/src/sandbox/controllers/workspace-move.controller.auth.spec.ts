@@ -15,6 +15,7 @@ import {
   getRequiredOrganizationResourcePermissions,
   isPublicEndpoint,
 } from '../../test/helpers/controller-metadata.helper'
+import { describe, expect, it } from 'vitest'
 
 describe('[AUTH] WorkspaceMoveController', () => {
   const trackMethod = createCoverageTracker(WorkspaceMoveController)
