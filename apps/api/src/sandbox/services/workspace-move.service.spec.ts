@@ -326,8 +326,18 @@ describe('WorkspaceMoveService', () => {
   ] as const)(
     'resumes after a crash at the %s phase without losing the durable operation',
     async (failedMethod, phase) => {
-      const { service, operations } = makeService()
+      const {
+        service,
+        operations,
+        operationRepository,
+        placementRepository,
+        storageNodeRepository,
+        workspacePlacementService,
+        claimExecutions,
+      } = makeService()
       await service.request(request)
+      const firstRunAt = new Date('2026-08-17T00:00:00.000Z')
+      const replacementRunAt = new Date(firstRunAt.getTime() + 60_001)
       let fail = true
       const runtime = {
         quiesce: vi.fn(async () => {
@@ -370,9 +380,19 @@ describe('WorkspaceMoveService', () => {
         }),
       }
 
-      await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
+      await expect(service.run(OPERATION_ID, runtime as any, firstRunAt)).rejects.toThrow('move_phase_failed')
       expect(operations[0].phase).toBe(phase)
-      await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
+      const replacementService = new WorkspaceMoveService(
+        operationRepository as any,
+        placementRepository as any,
+        storageNodeRepository as any,
+        workspacePlacementService as any,
+      )
+      await expect(replacementService.run(OPERATION_ID, runtime as any, replacementRunAt)).resolves.toMatchObject({
+        phase: 'complete',
+      })
+      expect(claimExecutions).toHaveLength(2)
+      expect(claimExecutions[1].params.now).toEqual(replacementRunAt)
     },
   )
 })
