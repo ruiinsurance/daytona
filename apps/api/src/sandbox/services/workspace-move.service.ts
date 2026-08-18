@@ -222,7 +222,14 @@ export class WorkspaceMoveService {
         }
       }
       operation.switchedFenceEpoch = String(switched.fenceEpoch)
-      operation = await this.operationRepository.save(operation)
+      try {
+        operation = await this.operationRepository.save(operation)
+      } catch (error) {
+        // The owner CAS is already durable. Keep the operation at
+        // target_verified so a replacement worker can reconcile the switched
+        // placement without exposing a raw persistence error.
+        throw new Error(this.phaseErrorCode(error))
+      }
       operation = await this.persistPhase(operation, 'owner_switched', now)
     }
     if (operation.phase === 'owner_switched') {

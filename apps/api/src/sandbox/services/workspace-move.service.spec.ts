@@ -101,6 +101,7 @@ function makeService() {
   return {
     service,
     operations,
+    placement,
     saveSnapshots,
     operationRepository,
     placementRepository,
@@ -360,6 +361,50 @@ describe('WorkspaceMoveService', () => {
 
     await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
     expect(runtime.startTarget).toHaveBeenCalledOnce()
+  })
+
+  it('recovers when owner CAS succeeds but operation persistence fails', async () => {
+    const { service, operations, placement, operationRepository, workspacePlacementService } = makeService()
+    await service.request(request)
+
+    let failNextOperationSave = false
+    const originalSave = operationRepository.save.getMockImplementation()
+    if (typeof originalSave !== 'function') throw new Error('test_save_implementation_missing')
+    operationRepository.save.mockImplementation(async (value: any) => {
+      if (failNextOperationSave) {
+        failNextOperationSave = false
+        throw new Error('injected_post_owner_switch_persist_failure')
+      }
+      return originalSave(value)
+    })
+    workspacePlacementService.switchOwner.mockImplementationOnce(async () => {
+      Object.assign(placement, {
+        ownerNodeId: TARGET_NODE_ID,
+        fenceEpoch: '4',
+        localGeneration: '4',
+      })
+      failNextOperationSave = true
+      return { ...placement }
+    })
+
+    const runtime = {
+      quiesce: vi.fn(),
+      checkpoint: vi.fn(async () => ({ generation: '4' })),
+      copy: vi.fn(),
+      verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
+      startTarget: vi.fn(),
+      retainSource: vi.fn(),
+    }
+
+    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
+    expect(operations[0]).toMatchObject({ phase: 'target_verified' })
+    expect(placement).toMatchObject({ ownerNodeId: TARGET_NODE_ID, fenceEpoch: '4', localGeneration: '4' })
+
+    await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
+    expect(workspacePlacementService.switchOwner).toHaveBeenCalledOnce()
+    expect(runtime.startTarget).toHaveBeenCalledOnce()
+    expect(runtime.retainSource).toHaveBeenCalledOnce()
   })
 
   it('persists a fixed Runner start category instead of hiding it as move_phase_failed', async () => {
