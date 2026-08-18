@@ -319,7 +319,7 @@ describe('RunnerStorageAgentMoveRuntime', () => {
     expect(agentClient.checkpoint).not.toHaveBeenCalled()
   })
 
-  it.each([null, new Date('invalid')])(
+  it.each([null, new Date('invalid'), new Date('2000-01-01T00:00:00.000Z')])(
     'fails closed when the move operation has no valid authoritative lease expiry',
     async (leaseExpiresAt) => {
       const agentClient = { quiesce: vi.fn() }

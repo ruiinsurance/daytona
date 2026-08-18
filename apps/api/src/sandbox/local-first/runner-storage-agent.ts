@@ -510,12 +510,14 @@ function normaliseLeaseExpiry(value: Date | null): string | undefined {
 
 function buildLease(input: Omit<AgentLease, 'leaseExpiresAt'> & { leaseExpiresAt?: string }): AgentLease {
   const leaseExpiresAt = input.leaseExpiresAt
+  const leaseExpiresAtMs = leaseExpiresAt ? Date.parse(leaseExpiresAt) : Number.NaN
   if (
     !UUID_RE.test(input.operationId) ||
     !DECIMAL_RE.test(input.fenceEpoch) ||
     !input.leaseOwner ||
     !leaseExpiresAt ||
-    !Number.isFinite(Date.parse(leaseExpiresAt))
+    !Number.isFinite(leaseExpiresAtMs) ||
+    leaseExpiresAtMs <= Date.now()
   ) {
     throw new Error('workspace_lease_invalid')
   }
