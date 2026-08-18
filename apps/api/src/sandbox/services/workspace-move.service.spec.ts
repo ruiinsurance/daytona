@@ -336,6 +336,32 @@ describe('WorkspaceMoveService', () => {
     expect(workspacePlacementService.switchOwner).not.toHaveBeenCalled()
   })
 
+  it('persists a fixed owner CAS category when the switch loses its race', async () => {
+    const { service, operations, workspacePlacementService } = makeService()
+    await service.request(request)
+    workspacePlacementService.switchOwner.mockRejectedValueOnce(new Error('workspace_owner_cas_miss'))
+    const runtime = {
+      quiesce: vi.fn(),
+      checkpoint: vi.fn(async () => ({ generation: '4' })),
+      copy: vi.fn(),
+      verifyTarget: vi.fn(async () => ({ generation: '4', manifestHash: 'a'.repeat(64) })),
+      prepareTarget: vi.fn(),
+      startTarget: vi.fn(),
+      retainSource: vi.fn(),
+    }
+
+    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('workspace_owner_cas_miss')
+
+    expect(operations[0]).toMatchObject({
+      phase: 'target_verified',
+      errorCode: 'workspace_owner_cas_miss',
+    })
+    expect(runtime.startTarget).not.toHaveBeenCalled()
+
+    await expect(service.run(OPERATION_ID, runtime as any)).resolves.toMatchObject({ phase: 'complete' })
+    expect(runtime.startTarget).toHaveBeenCalledOnce()
+  })
+
   it('persists a fixed Runner start category instead of hiding it as move_phase_failed', async () => {
     const { service, operations } = makeService()
     await service.request(request)

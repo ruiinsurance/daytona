@@ -14,6 +14,7 @@ import { StorageNodeState } from '../enums/storage-node-state.enum'
 import {
   assertMoveIdentity,
   assertMoveTransition,
+  isMoveControlPlaneErrorCode,
   isTerminalMovePhase,
   MovePhase,
 } from '../local-first/workspace-move.contract'
@@ -200,18 +201,25 @@ export class WorkspaceMoveService {
           await this.operationRepository.save(operation)
           throw new Error('move_generation_invalid')
         }
-        switched = await this.workspacePlacementService.switchOwner({
-          placementId: operation.placementId,
-          expectedOwnerNodeId: operation.sourceNodeId,
-          expectedFenceEpoch: expectedFence,
-          expectedLocalGeneration: placement.localGeneration,
-          operationId: operation.id,
-          operationLeaseOwner: operation.leaseOwner ?? '',
-          targetNodeId: operation.targetNodeId,
-          targetGeneration: operation.targetGeneration,
-          targetVerified: true,
-          now,
-        })
+        try {
+          switched = await this.workspacePlacementService.switchOwner({
+            placementId: operation.placementId,
+            expectedOwnerNodeId: operation.sourceNodeId,
+            expectedFenceEpoch: expectedFence,
+            expectedLocalGeneration: placement.localGeneration,
+            operationId: operation.id,
+            operationLeaseOwner: operation.leaseOwner ?? '',
+            targetNodeId: operation.targetNodeId,
+            targetGeneration: operation.targetGeneration,
+            targetVerified: true,
+            now,
+          })
+        } catch (error) {
+          const errorCode = this.phaseErrorCode(error)
+          operation.errorCode = errorCode
+          await this.operationRepository.save(operation)
+          throw new Error(errorCode)
+        }
       }
       operation.switchedFenceEpoch = String(switched.fenceEpoch)
       operation = await this.operationRepository.save(operation)
@@ -289,7 +297,10 @@ export class WorkspaceMoveService {
   }
 
   private phaseErrorCode(error: unknown): string {
-    return error instanceof Error && isStorageAgentErrorCode(error.message) ? error.message : 'move_phase_failed'
+    return error instanceof Error &&
+      (isStorageAgentErrorCode(error.message) || isMoveControlPlaneErrorCode(error.message))
+      ? error.message
+      : 'move_phase_failed'
   }
 
   private runtimeInput(operation: WorkspaceOperation): MoveRuntimeInput {

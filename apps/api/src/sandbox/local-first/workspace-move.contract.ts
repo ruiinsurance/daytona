@@ -34,6 +34,19 @@ const NEXT_PHASE: Record<MovePhase, MovePhase | null> = {
   complete: null,
 }
 
+const MOVE_CONTROL_PLANE_ERROR_CODES = new Set([
+  'move_generation_invalid',
+  'move_operation_lease_conflict',
+  'move_phase_failed',
+  'move_target_not_schedulable',
+  'target_not_verified',
+  'workspace_fence_invalid',
+  'workspace_generation_conflict',
+  'workspace_lease_conflict',
+  'workspace_lease_owner_conflict',
+  'workspace_owner_cas_miss',
+])
+
 export function nextMovePhase(current: MovePhase): MovePhase | null {
   return NEXT_PHASE[current]
 }
@@ -67,6 +80,10 @@ export function assertMoveIdentity(input: {
 
 export function isTerminalMovePhase(phase: MovePhase): boolean {
   return phase === 'complete'
+}
+
+export function isMoveControlPlaneErrorCode(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 64 && MOVE_CONTROL_PLANE_ERROR_CODES.has(value)
 }
 
 class ConflictLikeError extends Error {
