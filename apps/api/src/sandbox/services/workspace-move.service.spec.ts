@@ -380,7 +380,6 @@ describe('WorkspaceMoveService', () => {
       } = makeService()
       await service.request(request)
       const firstRunAt = new Date('2026-08-17T00:00:00.000Z')
-      const replacementRunAt = new Date(Date.now() + 5 * 60 * 1000 + 1)
       let fail = true
       const runtime = {
         quiesce: vi.fn(async () => {
@@ -431,6 +430,9 @@ describe('WorkspaceMoveService', () => {
 
       await expect(service.run(OPERATION_ID, runtime as any, firstRunAt)).rejects.toThrow('move_phase_failed')
       expect(operations[0].phase).toBe(phase)
+      const firstLeaseExpiry = operations[0].leaseExpiresAt
+      expect(firstLeaseExpiry).toBeInstanceOf(Date)
+      const replacementRunAt = new Date(firstLeaseExpiry.getTime() + 1)
       const replacementService = new WorkspaceMoveService(
         operationRepository as any,
         placementRepository as any,
