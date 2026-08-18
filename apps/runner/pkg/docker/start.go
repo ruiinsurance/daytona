@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	common_errors "github.com/daytonaio/common-go/pkg/errors"
 	"github.com/daytonaio/common-go/pkg/timer"
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/daytonaio/runner/pkg/common"
@@ -26,6 +27,8 @@ const (
 	localFirstStartContainerStartFailed     = "storage_agent_container_start_failed"
 	localFirstStartContainerReadinessFailed = "storage_agent_container_readiness_failed"
 	localFirstStartMountVerificationFailed  = "storage_agent_mount_verification_failed"
+	localFirstContainerVisibilityTimeout    = 5 * time.Second
+	localFirstContainerVisibilityInterval   = 50 * time.Millisecond
 )
 
 type localFirstStartError struct {
@@ -91,7 +94,7 @@ func (d *DockerClient) StartLocalFirstWorkspace(
 			LeaseExpiresAt: leaseExpiresAt,
 		},
 	}
-	inspected, err := d.ContainerInspect(ctx, containerID)
+	inspected, err := d.waitForLocalFirstContainer(ctx, containerID)
 	if err != nil || inspected == nil || inspected.State == nil {
 		return newLocalFirstStartError(localFirstStartContainerInspectFailed, err)
 	}
@@ -115,6 +118,40 @@ func (d *DockerClient) StartLocalFirstWorkspace(
 		return newLocalFirstStartError(localFirstStartMountVerificationFailed, d.failClosedContainerVolumeMount(ctx, running, err))
 	}
 	return nil
+}
+
+// waitForLocalFirstContainer tolerates the short visibility gap that can occur
+// when a target container was just created by a separate Runner request. A
+// missing container remains a bounded, fail-closed error; only Docker's
+// not-found category is retried, while daemon and identity errors return
+// immediately.
+func (d *DockerClient) waitForLocalFirstContainer(ctx context.Context, containerID string) (*container.InspectResponse, error) {
+	inspectCtx, cancel := context.WithTimeout(ctx, localFirstContainerVisibilityTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(localFirstContainerVisibilityInterval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		inspected, err := d.ContainerInspect(inspectCtx, containerID)
+		if err == nil {
+			return inspected, nil
+		}
+		lastErr = err
+		if !common_errors.IsNotFoundError(err) {
+			return nil, err
+		}
+
+		select {
+		case <-inspectCtx.Done():
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, inspectCtx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (d *DockerClient) Start(ctx context.Context, containerId string, authToken *string, metadata map[string]string) (*container.InspectResponse, string, error) {

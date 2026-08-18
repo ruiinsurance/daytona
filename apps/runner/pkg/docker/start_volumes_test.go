@@ -109,13 +109,30 @@ func newStartTestDockerClient(apiClient client.APIClient) *DockerClient {
 }
 
 func newVolumeMountStateClient(t *testing.T, sandboxID string, initiallyRunning bool, startCalls, killCalls *atomic.Int32) (*client.Client, *atomic.Bool) {
+	return newVolumeMountStateClientWithInspectNotFound(t, sandboxID, initiallyRunning, startCalls, killCalls, 0)
+}
+
+func newVolumeMountStateClientWithInspectNotFound(
+	t *testing.T,
+	sandboxID string,
+	initiallyRunning bool,
+	startCalls, killCalls *atomic.Int32,
+	inspectNotFound int32,
+) (*client.Client, *atomic.Bool) {
 	t.Helper()
 
 	running := &atomic.Bool{}
 	running.Store(initiallyRunning)
+	remainingNotFound := &atomic.Int32{}
+	remainingNotFound.Store(inspectNotFound)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1.51/containers/" + sandboxID + "/json":
+			if remainingNotFound.Load() > 0 {
+				remainingNotFound.Add(-1)
+				http.NotFound(w, r)
+				return
+			}
 			state := "exited"
 			pid := 0
 			if running.Load() {
@@ -239,6 +256,45 @@ func TestStartLocalFirstWorkspaceReturnsFixedMountPreparationCategory(t *testing
 	}
 	if got := startCalls.Load(); got != 0 {
 		t.Fatalf("ContainerStart calls = %d, want 0 before mount preparation succeeds", got)
+	}
+}
+
+func TestStartLocalFirstWorkspaceRetriesTransientContainerVisibility(t *testing.T) {
+	requireTestRunnerConfig(t)
+	installMountFailureCommands(t, 0)
+	prepareResponsiveVolumeMount(t)
+
+	const sandboxID = "77777777-7777-4777-8777-777777777777"
+	var startCalls, killCalls atomic.Int32
+	apiClient, _ := newVolumeMountStateClientWithInspectNotFound(t, sandboxID, false, &startCalls, &killCalls, 1)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localFirstStorageEnabled = true
+	dockerClient.localStorageRoot = t.TempDir()
+	dockerClient.storageNodeId = localTestNodeID
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO, string) error {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := dockerClient.StartLocalFirstWorkspace(
+		ctx,
+		sandboxID,
+		testVolumeID,
+		sandboxID,
+		localTestNodeID,
+		"1",
+		"runner:test",
+		time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		t.Fatalf("StartLocalFirstWorkspace() error = %v, want transient inspect not-found to recover", err)
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("ContainerStart calls = %d, want 1", got)
+	}
+	if got := killCalls.Load(); got != 0 {
+		t.Fatalf("ContainerKill calls = %d, want 0 after successful readiness", got)
 	}
 }
 
