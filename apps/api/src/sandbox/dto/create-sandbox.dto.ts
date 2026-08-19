@@ -12,6 +12,8 @@ import {
   IsNumber,
   IsBoolean,
   IsArray,
+  IsUUID,
+  Matches,
   Max,
   Min,
   ValidateNested,
@@ -21,10 +23,20 @@ import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { SandboxVolume } from './sandbox.dto'
 import { CreateBuildInfoDto } from './create-build-info.dto'
 import { IsSafeDisplayString } from '../../common/validators'
+import { CANONICAL_V4_UUID_RE } from '../../common/utils/uuid'
 import { GpuType } from '../enums/gpu-type.enum'
 
 @ApiSchema({ name: 'CreateSandbox' })
 export class CreateSandboxDto {
+  @ApiPropertyOptional({
+    description: 'Stable sandbox identity supplied by a trusted control plane',
+    format: 'uuid',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  @Matches(CANONICAL_V4_UUID_RE)
+  id?: string
+
   @ApiPropertyOptional({
     description: 'The name of the sandbox. If not provided, the sandbox ID will be used as the name',
     example: 'MySandbox',

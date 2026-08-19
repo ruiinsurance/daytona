@@ -85,6 +85,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path-validation.util'
+import { shouldUseWarmPoolForCreate } from '../utils/sandbox-create-identity'
 import { isEphemeral } from '../utils/ephemeral.util'
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import { SnapshotRepository } from '../repositories/snapshot.repository'
@@ -573,7 +574,14 @@ export class SandboxService {
       // runner for their lifetime and are auto-deleted on first stop. Skip the
       // warm-pool path entirely so we always provision a fresh container on a
       // currently-unoccupied GPU runner.
-      if (gpu <= 0 && !linkedSandbox && (!createSandboxDto.volumes || createSandboxDto.volumes.length === 0)) {
+      if (
+        shouldUseWarmPoolForCreate({
+          suppliedId: createSandboxDto.id,
+          gpu,
+          hasLinkedSandbox: Boolean(linkedSandbox),
+          volumeCount: createSandboxDto.volumes?.length ?? 0,
+        })
+      ) {
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${snapshot.id}`)) === 1
 
         if (!skipWarmPool) {
@@ -629,7 +637,11 @@ export class SandboxService {
         })
       }
 
-      const sandbox = new Sandbox({ region: region.id, name: createSandboxDto.name })
+      const sandbox = new Sandbox({
+        id: createSandboxDto.id,
+        region: region.id,
+        name: createSandboxDto.name,
+      })
 
       sandbox.organizationId = organization.id
 
@@ -904,7 +916,11 @@ export class SandboxService {
       // Resolve volume names to UUIDs, failing fast on invalid references
       const resolvedVolumes = await this.resolveVolumes(organization.id, createSandboxDto.volumes)
 
-      const sandbox = new Sandbox({ region: region.id, name: createSandboxDto.name })
+      const sandbox = new Sandbox({
+        id: createSandboxDto.id,
+        region: region.id,
+        name: createSandboxDto.name,
+      })
 
       sandbox.organizationId = organization.id
 

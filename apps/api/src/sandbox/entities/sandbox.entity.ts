@@ -26,6 +26,7 @@ import { BuildInfo } from './build-info.entity'
 import { nanoid } from 'nanoid'
 import { SandboxLastActivity } from './sandbox-last-activity.entity'
 import { isApiRecoverableError } from '../constants/errors-for-recovery'
+import { isCanonicalV4Uuid } from '../../common/utils/uuid'
 
 @Entity()
 @Unique(['organizationId', 'name'])
@@ -243,9 +244,12 @@ export class Sandbox {
   @Column({ nullable: true })
   linkedSandboxId?: string | null
 
-  constructor(params?: { region: string; name?: string }) {
+  constructor(params?: { region: string; name?: string; id?: string }) {
     if (!params) return
-    this.id = uuidv4()
+    if (params.id !== undefined && !isCanonicalV4Uuid(params.id)) {
+      throw new Error('Invalid sandbox identity')
+    }
+    this.id = params.id ?? uuidv4()
     this.name = params.name || this.id
     this.region = params.region
   }

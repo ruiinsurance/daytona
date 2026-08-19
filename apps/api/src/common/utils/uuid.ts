@@ -3,6 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+export const CANONICAL_V4_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
 export function isValidUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+}
+
+export function isCanonicalV4Uuid(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_V4_UUID_RE.test(value)
 }
