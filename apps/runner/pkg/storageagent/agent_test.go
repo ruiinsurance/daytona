@@ -266,6 +266,40 @@ func TestObserveWorkspaceFenceRejectsSymlinkedFenceDirectory(t *testing.T) {
 	}
 }
 
+func TestFenceStateUnavailableIsNotAConflict(t *testing.T) {
+	root := t.TempDir()
+	agent, err := New(Config{Root: root, NodeID: testNodeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "nodes", testNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+	if err := os.MkdirAll(workspace, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "fences"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "fences", testVolumeID)); err != nil {
+		t.Fatal(err)
+	}
+
+	err = agent.Fence(context.Background(), FenceRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "1",
+		LeaseOwner:     "move-worker:" + testOperation,
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	})
+	if Code(err) != "workspace_fence_state_unavailable" {
+		t.Fatalf("fence error = %q, want workspace_fence_state_unavailable", Code(err))
+	}
+	if IsConflict(err) {
+		t.Fatal("unavailable fence state must not be classified as a conflict")
+	}
+}
+
 func TestNormalStartRejectsQuiesceBarrier(t *testing.T) {
 	root := t.TempDir()
 	agent, err := New(Config{Root: root, NodeID: testNodeID})

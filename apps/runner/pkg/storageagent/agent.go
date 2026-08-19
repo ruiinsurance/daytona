@@ -477,7 +477,7 @@ func (a *Agent) validateRequest(ctx context.Context, operationID, volumeID, sand
 		return newError("workspace_lease_expired", true)
 	}
 	if err := ObserveWorkspaceFence(a.root, volumeID, sandboxID, fenceEpoch); err != nil {
-		return newError(err.Error(), true)
+		return err
 	}
 	return nil
 }

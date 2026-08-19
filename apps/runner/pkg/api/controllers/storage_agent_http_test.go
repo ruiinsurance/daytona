@@ -153,6 +153,27 @@ func TestStorageAgentHTTPContract(t *testing.T) {
 		t.Fatalf("stale start status/body = %d/%s", startResponse.Code, startResponse.Body.String())
 	}
 
+	if err := os.RemoveAll(filepath.Join(root, "fences", httpTestVolumeID)); err != nil {
+		t.Fatal(err)
+	}
+	fenceOutside := t.TempDir()
+	if err := os.Symlink(fenceOutside, filepath.Join(root, "fences", httpTestVolumeID)); err != nil {
+		t.Fatal(err)
+	}
+	unavailableFence := cloneMap(baseRequest)
+	unavailableFence["fenceEpoch"] = "9"
+	unavailableFenceResponse := postJSON(t, router, "/storage/workspaces/fence", unavailableFence)
+	if unavailableFenceResponse.Code != http.StatusInternalServerError || !strings.Contains(unavailableFenceResponse.Body.String(), "workspace_fence_state_unavailable") {
+		t.Fatalf("unavailable fence status/body = %d/%s", unavailableFenceResponse.Code, unavailableFenceResponse.Body.String())
+	}
+	entries, err := os.ReadDir(fenceOutside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("fence endpoint touched symlink target: %v", entries)
+	}
+
 	malformed := httptest.NewRequest(http.MethodPost, "/storage/workspaces/checkpoint", bytes.NewBufferString("not-json"))
 	malformed.Header.Set("Authorization", "Bearer "+httpTestToken)
 	malformedResponse := httptest.NewRecorder()
