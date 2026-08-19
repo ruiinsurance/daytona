@@ -243,6 +243,29 @@ func TestFenceRejectsStaleWriterAfterOwnerSwitch(t *testing.T) {
 	}
 }
 
+func TestObserveWorkspaceFenceRejectsSymlinkedFenceDirectory(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "fences"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "fences", testVolumeID)); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ObserveWorkspaceFence(root, testVolumeID, testSandboxID, "1")
+	if Code(err) != "workspace_fence_state_unavailable" {
+		t.Fatalf("symlinked fence directory error = %q, want workspace_fence_state_unavailable", Code(err))
+	}
+	entries, readErr := os.ReadDir(outside)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("fence observation touched symlink target: %v", entries)
+	}
+}
+
 func TestNormalStartRejectsQuiesceBarrier(t *testing.T) {
 	root := t.TempDir()
 	agent, err := New(Config{Root: root, NodeID: testNodeID})

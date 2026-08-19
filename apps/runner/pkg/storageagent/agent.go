@@ -491,25 +491,31 @@ type fenceState struct {
 // jobs cannot bypass a fence check by skipping the storage-agent endpoint.
 func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
 	if root == "" || !filepath.IsAbs(root) || filepath.Clean(root) != root || !isCanonicalUUID(volumeID) || !isCanonicalUUID(sandboxID) {
-		return errors.New("workspace_fence_invalid")
+		return newError("workspace_fence_invalid", true)
 	}
 	incoming, err := parseFenceEpoch(fenceEpoch)
 	if err != nil {
-		return err
+		return newError(err.Error(), true)
 	}
 
 	lockPath := filepath.Join(root, "fences", volumeID, sandboxID+".lock")
 	statePath := filepath.Join(root, "fences", volumeID, sandboxID+".json")
+	if err := rejectFenceStateSymlinks(root, filepath.Dir(statePath)); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
-		return errors.New("workspace_fence_state_unavailable")
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	if err := rejectFenceStateSymlinks(root, filepath.Dir(statePath)); err != nil {
+		return err
 	}
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return errors.New("workspace_fence_state_unavailable")
+		return newError("workspace_fence_state_unavailable", false)
 	}
 	defer lock.Close()
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-		return errors.New("workspace_fence_state_unavailable")
+		return newError("workspace_fence_state_unavailable", false)
 	}
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 
@@ -518,23 +524,48 @@ func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
 	if readErr == nil {
 		var state fenceState
 		if json.Unmarshal(stateBody, &state) != nil {
-			return errors.New("workspace_fence_state_invalid")
+			return newError("workspace_fence_state_invalid", true)
 		}
 		current, err = parseFenceEpoch(state.FenceEpoch)
 		if err != nil {
-			return errors.New("workspace_fence_state_invalid")
+			return newError("workspace_fence_state_invalid", true)
 		}
 	} else if !os.IsNotExist(readErr) {
-		return errors.New("workspace_fence_state_unavailable")
+		return newError("workspace_fence_state_unavailable", false)
 	}
 	if readErr == nil && incoming < current {
-		return errors.New("stale_workspace_fence")
+		return newError("stale_workspace_fence", true)
 	}
 	if readErr == nil && incoming == current {
 		return nil
 	}
 	if err := writeFenceState(statePath, fenceState{FenceEpoch: fenceEpoch}); err != nil {
-		return errors.New("workspace_fence_state_unavailable")
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	return nil
+}
+
+func rejectFenceStateSymlinks(root, path string) error {
+	relative, err := filepath.Rel(root, filepath.Clean(path))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	current := root
+	if relative == "." {
+		return nil
+	}
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 {
+			return newError("workspace_fence_state_unavailable", false)
+		}
 	}
 	return nil
 }

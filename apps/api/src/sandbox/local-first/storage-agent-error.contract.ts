@@ -23,6 +23,17 @@ const STORAGE_AGENT_ERROR_CODES = new Set([
   'storage_agent_target_preparation_failed',
   'storage_agent_target_preparation_timeout',
   'storage_agent_disabled',
+  // Runner-side identity, lease, fencing, and quiesce barriers are stable
+  // control-plane signals and must not be collapsed into request_failed.
+  'storage_identity_invalid',
+  'storage_node_identity_mismatch',
+  'workspace_fence_invalid',
+  'workspace_lease_expired',
+  'workspace_fence_state_unavailable',
+  'workspace_fence_state_invalid',
+  'stale_workspace_fence',
+  'workspace_quiesce_conflict',
+  'workspace_lock_unavailable',
 ])
 
 const STORAGE_AGENT_HTTP_ERROR_RE = /^storage_agent_http_[1-5][0-9]{2}$/

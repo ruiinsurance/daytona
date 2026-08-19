@@ -34,6 +34,17 @@ const (
 func TestStorageAgentHTTPContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	root := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return os.Chmod(path, 0o700)
+			}
+			return os.Chmod(path, 0o600)
+		})
+	})
 	agent, err := storageagent.New(storageagent.Config{Root: root, NodeID: httpTestNodeID})
 	if err != nil {
 		t.Fatal(err)

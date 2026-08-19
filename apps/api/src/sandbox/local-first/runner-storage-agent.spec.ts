@@ -101,6 +101,15 @@ describe('RunnerStorageAgentClient', () => {
     'storage_agent_container_readiness_failed',
     'storage_agent_mount_verification_failed',
     'storage_agent_start_failed',
+    'storage_identity_invalid',
+    'storage_node_identity_mismatch',
+    'workspace_fence_invalid',
+    'workspace_lease_expired',
+    'workspace_fence_state_unavailable',
+    'workspace_fence_state_invalid',
+    'stale_workspace_fence',
+    'workspace_quiesce_conflict',
+    'workspace_lock_unavailable',
   ])('preserves the fixed Runner start category %s', async (code) => {
     vi.stubGlobal(
       'fetch',
