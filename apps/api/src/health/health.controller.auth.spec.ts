@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { describe, expect, it } from 'vitest'
 import { HealthController } from './health.controller'
 import { HealthCheckAuthContextGuard } from './guards/health-check-auth-context.guard'
 import { AuthStrategyType } from '../auth/enums/auth-strategy-type.enum'
