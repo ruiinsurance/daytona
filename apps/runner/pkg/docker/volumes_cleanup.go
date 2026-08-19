@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -148,12 +147,12 @@ func (d *DockerClient) isRecentlyCreated(path string, exclusionPeriod time.Durat
 		return false
 	}
 
-	// Use ctime (inode change time) instead of mtime (content modification time)
-	stat, ok := info.Sys().(*syscall.Stat_t)
+	// Use ctime on Linux and fall back to mtime on platforms without a
+	// portable inode-change timestamp.
+	ctime, ok := fileChangeTime(info)
 	if !ok {
 		// Fallback to mtime if syscall.Stat_t is not available
 		return time.Since(info.ModTime()) < exclusionPeriod
 	}
-	ctime := time.Unix(stat.Ctim.Sec, stat.Ctim.Nsec)
 	return time.Since(ctime) < exclusionPeriod
 }

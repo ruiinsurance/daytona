@@ -13,7 +13,6 @@ import (
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
-	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -203,34 +202,6 @@ func (d *DockerClient) clearLinkNetworkIsolation(ctx context.Context, ownerId st
 		d.logger.WarnContext(ctx, "Failed to clear bridge port isolation",
 			"bridge", bridge, "error", err)
 	}
-}
-
-// clearBridgePortIsolation walks every link whose master is the named bridge
-// and clears `isolated` on it. Idempotent — already-unisolated ports are a
-// no-op. Per-port errors are logged and the sweep continues so a single
-// transient netlink error doesn't leave half the bridge stuck isolated.
-func (d *DockerClient) clearBridgePortIsolation(ctx context.Context, bridgeName string) error {
-	bridge, err := netlink.LinkByName(bridgeName)
-	if err != nil {
-		return fmt.Errorf("look up bridge %s: %w", bridgeName, err)
-	}
-	links, err := netlink.LinkList()
-	if err != nil {
-		return fmt.Errorf("list links: %w", err)
-	}
-	bridgeIdx := bridge.Attrs().Index
-	for _, link := range links {
-		attrs := link.Attrs()
-		if attrs.MasterIndex != bridgeIdx {
-			continue
-		}
-		if err := netlink.LinkSetIsolated(link, false); err != nil {
-			d.logger.WarnContext(ctx, "Failed to clear isolation on bridge port",
-				"bridge", bridgeName, "port", attrs.Name, "error", err)
-			continue
-		}
-	}
-	return nil
 }
 
 // ensureOwnerOnLinkNetwork connects the owner container to its link network with an
