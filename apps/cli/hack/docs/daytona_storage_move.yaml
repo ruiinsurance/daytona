@@ -1,0 +1,24 @@
+name: daytona storage move
+synopsis: Request a workspace move through the control plane
+usage: daytona storage move [SANDBOX_ID] [flags]
+options:
+    - name: fence-epoch
+      usage: current fencing epoch
+    - name: idempotency-key
+      usage: retry key for this move request
+    - name: operation-id
+      usage: idempotent move operation UUID
+    - name: placement-id
+      usage: workspace placement UUID
+    - name: source-node-id
+      usage: current owner node UUID
+    - name: target-node-id
+      usage: verified target node UUID
+    - name: volume-id
+      usage: workspace volume UUID
+inherited_options:
+    - name: help
+      default_value: "false"
+      usage: help for daytona
+see_also:
+    - daytona storage - Manage local-first storage through the Daytona control plane

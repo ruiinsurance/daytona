@@ -36,5 +36,6 @@ daytona [flags]
 * [daytona ssh](daytona_ssh.md)  - SSH into a sandbox
 * [daytona start](daytona_start.md)  - Start a sandbox
 * [daytona stop](daytona_stop.md)  - Stop a sandbox
+* [daytona storage](daytona_storage.md)  - Manage local-first storage through the Daytona control plane
 * [daytona version](daytona_version.md)  - Print the version number
 * [daytona volume](daytona_volume.md)  - Manage Daytona volumes

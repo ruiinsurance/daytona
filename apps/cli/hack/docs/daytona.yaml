@@ -28,5 +28,6 @@ see_also:
   - daytona ssh - SSH into a sandbox
   - daytona start - Start a sandbox
   - daytona stop - Stop a sandbox
+  - daytona storage - Manage local-first storage through the Daytona control plane
   - daytona version - Print the version number
   - daytona volume - Manage Daytona volumes

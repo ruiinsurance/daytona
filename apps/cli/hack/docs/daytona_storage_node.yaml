@@ -1,0 +1,13 @@
+name: daytona storage node
+synopsis: Manage storage node lifecycle
+inherited_options:
+    - name: help
+      default_value: "false"
+      usage: help for daytona
+see_also:
+    - daytona storage - Manage local-first storage through the Daytona control plane
+    - daytona storage node activate - activate a storage node through the control plane
+    - daytona storage node cordon - cordon a storage node through the control plane
+    - daytona storage node drain - drain a storage node through the control plane
+    - daytona storage node remove - remove a storage node through the control plane
+    - daytona storage node status - status a storage node through the control plane

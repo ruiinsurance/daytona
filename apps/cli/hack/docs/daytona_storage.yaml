@@ -1,0 +1,11 @@
+name: daytona storage
+synopsis: Manage local-first storage through the Daytona control plane
+inherited_options:
+    - name: help
+      default_value: "false"
+      usage: help for daytona
+see_also:
+    - daytona - Daytona CLI
+    - daytona storage move - Request a workspace move through the control plane
+    - daytona storage move-status - Get workspace move status through the control plane
+    - daytona storage node - Manage storage node lifecycle

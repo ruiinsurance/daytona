@@ -1,0 +1,9 @@
+name: daytona storage node drain
+synopsis: drain a storage node through the control plane
+usage: daytona storage node drain [RUNNER_ID] [NODE_ID] [flags]
+inherited_options:
+    - name: help
+      default_value: "false"
+      usage: help for daytona
+see_also:
+    - daytona storage node - Manage storage node lifecycle

@@ -72,7 +72,7 @@ func init() {
 	moveCmd.Flags().StringVar(&targetNodeID, "target-node-id", "", "verified target node UUID")
 	moveCmd.Flags().StringVar(&expectedFenceEpoch, "fence-epoch", "", "current fencing epoch")
 	moveCmd.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "retry key for this move request")
-	StorageCmd.AddCommand(nodeCmd, moveCmd)
+	StorageCmd.AddCommand(nodeCmd, moveCmd, moveStatusCmd)
 }
 
 var moveCmd = &cobra.Command{
@@ -106,6 +106,31 @@ var moveCmd = &cobra.Command{
 			"expectedFenceEpoch": expectedFenceEpoch,
 			"idempotencyKey":     idempotencyKey,
 		}, cmd.OutOrStdout())
+	},
+}
+
+var moveStatusCmd = &cobra.Command{
+	Use:   "move-status [SANDBOX_ID] [OPERATION_ID]",
+	Short: "Get workspace move status through the control plane",
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(2)(cmd, args); err != nil {
+			return err
+		}
+		for _, value := range args {
+			if !canonicalUUID.MatchString(value) {
+				return fmt.Errorf("sandbox and operation IDs must be canonical UUIDs")
+			}
+		}
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return requestStorageControlPlane(
+			cmd.Context(),
+			http.MethodGet,
+			"/storage-workspaces/"+args[0]+"/operations/"+args[1],
+			nil,
+			cmd.OutOrStdout(),
+		)
 	},
 }
 
