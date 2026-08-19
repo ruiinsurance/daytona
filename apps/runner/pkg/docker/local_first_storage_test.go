@@ -63,7 +63,11 @@ func TestLocalFirstMountsUseOneCanonicalSourceForWorkspaceAndConfig(t *testing.T
 		t.Fatalf("getVolumesMountPathBinds() error = %v", err)
 	}
 
-	wantSource := filepath.Join(root, "nodes", localTestNodeID, "volumes", localTestVolumeID, "sandboxes", localTestSandboxID, "workspace")
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve local-first test root: %v", err)
+	}
+	wantSource := filepath.Join(canonicalRoot, "nodes", localTestNodeID, "volumes", localTestVolumeID, "sandboxes", localTestSandboxID, "workspace")
 	want := []string{wantSource + "/:/workspace/", wantSource + "/:/config/"}
 	if strings.Join(binds, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("binds = %#v, want %#v", binds, want)

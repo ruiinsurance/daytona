@@ -175,7 +175,7 @@ func newVolumeMountStateClientWithInspectNotFound(
 func prepareResponsiveVolumeMount(t *testing.T) {
 	t.Helper()
 
-	mountPath := filepath.Join(os.TempDir(), volumeMountPrefix+testVolumeID)
+	mountPath := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+testVolumeID)
 	if err := os.RemoveAll(mountPath); err != nil {
 		t.Fatalf("remove previous test mount path: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestEnsureVolumeFuseMountedRejectsUnresponsiveExistingMount(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)
 
-	mountPath := filepath.Join(os.TempDir(), volumeMountPrefix+testVolumeID)
+	mountPath := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+testVolumeID)
 	if err := os.RemoveAll(mountPath); err != nil {
 		t.Fatalf("remove stale test mount path: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestEnsureVolumeFuseMountedAcceptsResponsiveExistingMount(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)
 
-	mountPath := filepath.Join(os.TempDir(), volumeMountPrefix+testVolumeID)
+	mountPath := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+testVolumeID)
 	if err := os.RemoveAll(mountPath); err != nil {
 		t.Fatalf("remove previous test mount path: %v", err)
 	}

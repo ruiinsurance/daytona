@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func prepareVolumeVerificationSource(t *testing.T) (dto.VolumeDTO, string) {
 	prepareResponsiveVolumeMount(t)
 
 	subpath := "device-verification"
-	baseMountPath := filepath.Join(os.TempDir(), volumeMountPrefix+testVolumeID)
+	baseMountPath := filepath.Join(getVolumeMountBasePath(), volumeMountPrefix+testVolumeID)
 	bindSource := filepath.Join(baseMountPath, subpath)
 	if err := os.MkdirAll(bindSource, 0o755); err != nil {
 		t.Fatalf("create bind source: %v", err)
@@ -42,6 +43,9 @@ func prepareVolumeVerificationSource(t *testing.T) (dto.VolumeDTO, string) {
 }
 
 func TestVerifyContainerVolumeMountDevicesAcceptsMatchingDevice(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("container mount device verification requires Linux /proc root semantics")
+	}
 	volume, bindSource := prepareVolumeVerificationSource(t)
 	volume.MountPath = bindSource
 
@@ -54,6 +58,9 @@ func TestVerifyContainerVolumeMountDevicesAcceptsMatchingDevice(t *testing.T) {
 }
 
 func TestVerifyContainerVolumeMountDevicesRejectsDifferentDevice(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("container mount device verification requires Linux /proc root semantics")
+	}
 	volume, bindSource := prepareVolumeVerificationSource(t)
 	otherDevicePath, err := os.MkdirTemp("/dev/shm", "daytona-volume-device-test-")
 	if err != nil {
