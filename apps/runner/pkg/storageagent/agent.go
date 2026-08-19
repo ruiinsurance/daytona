@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -383,20 +384,40 @@ func (a *Agent) Quiesce(ctx context.Context, request QuiesceRequest) error {
 	if _, err := a.workspacePath(request.VolumeID, request.SandboxID, request.NodeID, false); err != nil {
 		return err
 	}
-	lockPath := a.lockPath(request.VolumeID, request.SandboxID)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
+	directory, err := openStorageStateDirectory(a.root, "locks", request.VolumeID, true)
+	if err != nil {
 		return newError("quiesce_unavailable", false)
 	}
-	file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	defer directory.Close()
+	lockName := request.SandboxID + ".lock"
+	lockFD, err := unix.Openat(
+		directory.volumeFD,
+		lockName,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0o640,
+	)
 	if err != nil {
-		if !os.IsExist(err) {
+		if !errors.Is(err, unix.EEXIST) {
 			return newError("quiesce_unavailable", false)
 		}
-		body, readErr := os.ReadFile(lockPath)
-		if readErr == nil && strings.TrimSpace(string(body)) == request.OperationID {
+		body, readErr := readStorageStateFile(directory.volumeFD, lockName)
+		if readErr != nil {
+			return newError("quiesce_unavailable", false)
+		}
+		if strings.TrimSpace(string(body)) == request.OperationID {
 			return nil
 		}
 		return newError("workspace_quiesce_conflict", true)
+	}
+	file := os.NewFile(uintptr(lockFD), lockName)
+	if file == nil {
+		_ = unix.Close(lockFD)
+		return newError("quiesce_unavailable", false)
+	}
+	info, statErr := file.Stat()
+	if statErr != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return newError("quiesce_unavailable", false)
 	}
 	if _, err := io.WriteString(file, request.OperationID+"\n"); err != nil {
 		_ = file.Close()
@@ -409,6 +430,9 @@ func (a *Agent) Quiesce(ctx context.Context, request QuiesceRequest) error {
 	if err := file.Close(); err != nil {
 		return newError("quiesce_sync_failed", false)
 	}
+	if err := unix.Fsync(directory.volumeFD); err != nil {
+		return newError("quiesce_sync_failed", false)
+	}
 	unix.Sync()
 	return nil
 }
@@ -418,7 +442,7 @@ func (a *Agent) Start(ctx context.Context, request StartRequest) error {
 		return err
 	}
 	if err := AssertWorkspaceStartAllowed(a.root, request.VolumeID, request.SandboxID, request.FenceEpoch); err != nil {
-		return newError(err.Error(), true)
+		return err
 	}
 	if _, err := a.workspacePath(request.VolumeID, request.SandboxID, request.NodeID, false); err != nil {
 		return err
@@ -486,6 +510,20 @@ type fenceState struct {
 	FenceEpoch string `json:"fenceEpoch"`
 }
 
+var fenceTempSequence uint64
+
+type storageStateDirectory struct {
+	rootFD      int
+	namespaceFD int
+	volumeFD    int
+}
+
+func (d *storageStateDirectory) Close() {
+	_ = unix.Close(d.volumeFD)
+	_ = unix.Close(d.namespaceFD)
+	_ = unix.Close(d.rootFD)
+}
+
 // ObserveWorkspaceFence persists the highest fence epoch accepted by this
 // Runner. It is shared by the storage agent and Docker start path so queued
 // jobs cannot bypass a fence check by skipping the storage-agent endpoint.
@@ -498,29 +536,39 @@ func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
 		return newError(err.Error(), true)
 	}
 
-	lockPath := filepath.Join(root, "fences", volumeID, sandboxID+".lock")
-	statePath := filepath.Join(root, "fences", volumeID, sandboxID+".json")
-	if err := rejectFenceStateSymlinks(root, filepath.Dir(statePath)); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
-		return newError("workspace_fence_state_unavailable", false)
-	}
-	if err := rejectFenceStateSymlinks(root, filepath.Dir(statePath)); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	directory, err := openStorageStateDirectory(root, "fences", volumeID, true)
 	if err != nil {
 		return newError("workspace_fence_state_unavailable", false)
 	}
-	defer lock.Close()
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+	defer directory.Close()
+
+	lockFD, err := unix.Openat(
+		directory.volumeFD,
+		sandboxID+".lock",
+		unix.O_RDWR|unix.O_CREAT|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0o600,
+	)
+	if err != nil {
 		return newError("workspace_fence_state_unavailable", false)
 	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+	lockFile := os.NewFile(uintptr(lockFD), sandboxID+".lock")
+	if lockFile == nil {
+		_ = unix.Close(lockFD)
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	lockInfo, err := lockFile.Stat()
+	if err != nil || !lockInfo.Mode().IsRegular() {
+		_ = lockFile.Close()
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	defer lockFile.Close()
+	if err := unix.Flock(lockFD, unix.LOCK_EX); err != nil {
+		return newError("workspace_fence_state_unavailable", false)
+	}
+	defer unix.Flock(lockFD, unix.LOCK_UN)
 
 	current := uint64(0)
-	stateBody, readErr := os.ReadFile(statePath)
+	stateBody, readErr := readStorageStateFile(directory.volumeFD, sandboxID+".json")
 	if readErr == nil {
 		var state fenceState
 		if json.Unmarshal(stateBody, &state) != nil {
@@ -530,7 +578,7 @@ func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
 		if err != nil {
 			return newError("workspace_fence_state_invalid", true)
 		}
-	} else if !os.IsNotExist(readErr) {
+	} else if !errors.Is(readErr, unix.ENOENT) {
 		return newError("workspace_fence_state_unavailable", false)
 	}
 	if readErr == nil && incoming < current {
@@ -539,35 +587,82 @@ func ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch string) error {
 	if readErr == nil && incoming == current {
 		return nil
 	}
-	if err := writeFenceState(statePath, fenceState{FenceEpoch: fenceEpoch}); err != nil {
+	if err := writeFenceState(directory.volumeFD, sandboxID+".json", fenceState{FenceEpoch: fenceEpoch}); err != nil {
 		return newError("workspace_fence_state_unavailable", false)
 	}
 	return nil
 }
 
-func rejectFenceStateSymlinks(root, path string) error {
-	relative, err := filepath.Rel(root, filepath.Clean(path))
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return newError("workspace_fence_state_unavailable", false)
+func openStorageStateDirectory(root, namespace, volumeID string, create bool) (*storageStateDirectory, error) {
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
 	}
-	current := root
-	if relative == "." {
-		return nil
+	namespaceFD, err := openStorageStateDirectoryAt(rootFD, namespace, create)
+	if err != nil {
+		_ = unix.Close(rootFD)
+		return nil, err
 	}
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
-		if component == "" || component == "." {
-			continue
+	volumeFD, err := openStorageStateDirectoryAt(namespaceFD, volumeID, create)
+	if err != nil {
+		_ = unix.Close(namespaceFD)
+		_ = unix.Close(rootFD)
+		return nil, err
+	}
+	return &storageStateDirectory{rootFD: rootFD, namespaceFD: namespaceFD, volumeFD: volumeFD}, nil
+}
+
+func openStorageStateDirectoryAt(parentFD int, name string, create bool) (int, error) {
+	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW
+	fd, err := unix.Openat(parentFD, name, flags, 0)
+	if err == nil {
+		return fd, nil
+	}
+	if !create || !errors.Is(err, unix.ENOENT) {
+		return -1, err
+	}
+	created := false
+	if err := unix.Mkdirat(parentFD, name, 0o750); err != nil {
+		if !errors.Is(err, unix.EEXIST) {
+			return -1, err
 		}
-		current = filepath.Join(current, component)
-		info, statErr := os.Lstat(current)
-		if os.IsNotExist(statErr) {
-			return nil
-		}
-		if statErr != nil || info.Mode()&os.ModeSymlink != 0 {
-			return newError("workspace_fence_state_unavailable", false)
+	} else {
+		created = true
+	}
+	fd, err = unix.Openat(parentFD, name, flags, 0)
+	if err != nil {
+		return -1, err
+	}
+	if created {
+		if err := unix.Fsync(parentFD); err != nil {
+			_ = unix.Close(fd)
+			return -1, err
 		}
 	}
-	return nil
+	return fd, nil
+}
+
+func readStorageStateFile(dirFD int, name string) ([]byte, error) {
+	fd, err := unix.Openat(dirFD, name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("fence state file unavailable")
+	}
+	info, statErr := file.Stat()
+	if statErr != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("fence state file unavailable")
+	}
+	body, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	return body, closeErr
 }
 
 // AssertWorkspaceStartAllowed applies the local fence and quiesce barriers
@@ -576,13 +671,20 @@ func AssertWorkspaceStartAllowed(root, volumeID, sandboxID, fenceEpoch string) e
 	if err := ObserveWorkspaceFence(root, volumeID, sandboxID, fenceEpoch); err != nil {
 		return err
 	}
-	lockPath := filepath.Join(root, "locks", volumeID, sandboxID+".lock")
-	if _, err := os.Stat(lockPath); err == nil {
-		return errors.New("workspace_quiesce_conflict")
-	} else if !os.IsNotExist(err) {
-		return errors.New("workspace_lock_unavailable")
+	directory, err := openStorageStateDirectory(root, "locks", volumeID, false)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
 	}
-	return nil
+	if err != nil {
+		return newError("workspace_lock_unavailable", false)
+	}
+	defer directory.Close()
+	if _, err := readStorageStateFile(directory.volumeFD, sandboxID+".lock"); errors.Is(err, unix.ENOENT) {
+		return nil
+	} else if err != nil {
+		return newError("workspace_lock_unavailable", false)
+	}
+	return newError("workspace_quiesce_conflict", true)
 }
 
 func parseFenceEpoch(value string) (uint64, error) {
@@ -596,34 +698,54 @@ func parseFenceEpoch(value string) (uint64, error) {
 	return parsed, nil
 }
 
-func writeFenceState(path string, state fenceState) error {
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".fence-state-")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
+func writeFenceState(dirFD int, name string, state fenceState) error {
 	body, err := json.Marshal(state)
 	if err != nil {
-		_ = temporary.Close()
 		return err
 	}
-	if _, err := temporary.Write(append(body, '\n')); err != nil {
-		_ = temporary.Close()
-		return err
+	body = append(body, '\n')
+	for attempt := uint64(0); attempt < 16; attempt++ {
+		tempName := ".fence-state-" + strconv.FormatUint(uint64(os.Getpid()), 10) + "-" + strconv.FormatUint(atomic.AddUint64(&fenceTempSequence, 1), 10)
+		fd, err := unix.Openat(dirFD, tempName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		writeErr := writeFenceBytes(fd, body)
+		if writeErr == nil {
+			writeErr = unix.Fsync(fd)
+		}
+		closeErr := unix.Close(fd)
+		if writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			_ = unix.Unlinkat(dirFD, tempName, 0)
+			return writeErr
+		}
+		if err := unix.Renameat(dirFD, tempName, dirFD, name); err != nil {
+			_ = unix.Unlinkat(dirFD, tempName, 0)
+			return err
+		}
+		return unix.Fsync(dirFD)
 	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
+	return errors.New("fence state temporary file unavailable")
+}
+
+func writeFenceBytes(fd int, body []byte) error {
+	for len(body) > 0 {
+		written, err := unix.Write(fd, body)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		body = body[written:]
 	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
+	return nil
 }
 
 func (a *Agent) workspacePath(volumeID, sandboxID, nodeID string, createParent bool) (string, error) {
@@ -697,13 +819,17 @@ func (a *Agent) assertNoSymlinkComponents(path string) error {
 	return nil
 }
 
-func (a *Agent) lockPath(volumeID, sandboxID string) string {
-	return filepath.Join(a.root, "locks", volumeID, sandboxID+".lock")
-}
-
 func (a *Agent) rejectConflictingLock(volumeID, sandboxID, operationID string) error {
-	body, err := os.ReadFile(a.lockPath(volumeID, sandboxID))
-	if isNotFound(err) {
+	directory, err := openStorageStateDirectory(a.root, "locks", volumeID, false)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return newError("workspace_lock_unavailable", false)
+	}
+	defer directory.Close()
+	body, err := readStorageStateFile(directory.volumeFD, sandboxID+".lock")
+	if errors.Is(err, unix.ENOENT) {
 		return nil
 	}
 	if err != nil {

@@ -266,6 +266,65 @@ func TestObserveWorkspaceFenceRejectsSymlinkedFenceDirectory(t *testing.T) {
 	}
 }
 
+func TestObserveWorkspaceFenceRejectsSymlinkedFenceFiles(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		fileName    string
+		targetBody  []byte
+		checkTarget func(t *testing.T, target string)
+	}{
+		{
+			name:     "lock",
+			fileName: testSandboxID + ".lock",
+			checkTarget: func(t *testing.T, target string) {
+				t.Helper()
+				if _, err := os.Lstat(target); !os.IsNotExist(err) {
+					t.Fatalf("fence observation touched lock symlink target: %v", err)
+				}
+			},
+		},
+		{
+			name:       "state",
+			fileName:   testSandboxID + ".json",
+			targetBody: []byte(`{"fenceEpoch":"0"}`),
+			checkTarget: func(t *testing.T, target string) {
+				t.Helper()
+				body, err := os.ReadFile(target)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(body) != `{"fenceEpoch":"0"}` {
+					t.Fatalf("state symlink target changed: %q", body)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			fenceDir := filepath.Join(root, "fences", testVolumeID)
+			if err := os.MkdirAll(fenceDir, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(outside, testCase.fileName)
+			if testCase.targetBody != nil {
+				if err := os.WriteFile(target, testCase.targetBody, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(target, filepath.Join(fenceDir, testCase.fileName)); err != nil {
+				t.Fatal(err)
+			}
+
+			err := ObserveWorkspaceFence(root, testVolumeID, testSandboxID, "1")
+			if Code(err) != "workspace_fence_state_unavailable" {
+				t.Fatalf("symlinked fence %s error = %q, want workspace_fence_state_unavailable", testCase.name, Code(err))
+			}
+			testCase.checkTarget(t, target)
+		})
+	}
+}
+
 func TestFenceStateUnavailableIsNotAConflict(t *testing.T) {
 	root := t.TempDir()
 	agent, err := New(Config{Root: root, NodeID: testNodeID})
@@ -297,6 +356,137 @@ func TestFenceStateUnavailableIsNotAConflict(t *testing.T) {
 	}
 	if IsConflict(err) {
 		t.Fatal("unavailable fence state must not be classified as a conflict")
+	}
+}
+
+func TestQuiesceRejectsSymlinkedLockPaths(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		prepare     func(t *testing.T, root, outside string)
+		checkTarget func(t *testing.T, outside string)
+	}{
+		{
+			name: "directory",
+			prepare: func(t *testing.T, root, outside string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "locks"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(root, "locks", testVolumeID)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			checkTarget: func(t *testing.T, outside string) {
+				t.Helper()
+				entries, err := os.ReadDir(outside)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("quiesce touched symlink target: %v", entries)
+				}
+			},
+		},
+		{
+			name: "file",
+			prepare: func(t *testing.T, root, outside string) {
+				t.Helper()
+				lockDir := filepath.Join(root, "locks", testVolumeID)
+				if err := os.MkdirAll(lockDir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				outsideLock := filepath.Join(outside, "quiesce.lock")
+				if err := os.WriteFile(outsideLock, []byte("untouched\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outsideLock, filepath.Join(lockDir, testSandboxID+".lock")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			checkTarget: func(t *testing.T, outside string) {
+				t.Helper()
+				body, err := os.ReadFile(filepath.Join(outside, "quiesce.lock"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(body) != "untouched\n" {
+					t.Fatalf("quiesce symlink target changed: %q", body)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			agent, err := New(Config{Root: root, NodeID: testNodeID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(root, "nodes", testNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+			if err := os.MkdirAll(workspace, 0o770); err != nil {
+				t.Fatal(err)
+			}
+			testCase.prepare(t, root, outside)
+
+			err = agent.Quiesce(context.Background(), QuiesceRequest{
+				OperationID:    testOperation,
+				VolumeID:       testVolumeID,
+				SandboxID:      testSandboxID,
+				NodeID:         testNodeID,
+				FenceEpoch:     "1",
+				LeaseOwner:     "move-worker:" + testOperation,
+				LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+			})
+			if Code(err) != "quiesce_unavailable" {
+				t.Fatalf("symlinked quiesce %s error = %q, want quiesce_unavailable", testCase.name, Code(err))
+			}
+			testCase.checkTarget(t, outside)
+		})
+	}
+}
+
+func TestStartRejectsUnavailableQuiesceLockAsNonConflict(t *testing.T) {
+	root := t.TempDir()
+	agent, err := New(Config{Root: root, NodeID: testNodeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(root, "nodes", testNodeID, "volumes", testVolumeID, "sandboxes", testSandboxID, "workspace")
+	if err := os.MkdirAll(workspace, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Fence(context.Background(), FenceRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "1",
+		LeaseOwner:     "move-worker:" + testOperation,
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "locks", testVolumeID), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "locks", testVolumeID, testSandboxID+".lock")); err != nil {
+		t.Fatal(err)
+	}
+
+	err = agent.Start(context.Background(), StartRequest{
+		OperationID:    testOperation,
+		VolumeID:       testVolumeID,
+		SandboxID:      testSandboxID,
+		NodeID:         testNodeID,
+		FenceEpoch:     "1",
+		LeaseOwner:     "runner:queued",
+		LeaseExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+	})
+	if Code(err) != "workspace_lock_unavailable" {
+		t.Fatalf("unavailable quiesce lock error = %q, want workspace_lock_unavailable", Code(err))
+	}
+	if IsConflict(err) {
+		t.Fatal("unavailable quiesce lock must not be classified as a conflict")
 	}
 }
 
