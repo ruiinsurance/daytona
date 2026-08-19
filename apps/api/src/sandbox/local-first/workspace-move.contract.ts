@@ -37,6 +37,7 @@ const NEXT_PHASE: Record<MovePhase, MovePhase | null> = {
 const MOVE_CONTROL_PLANE_ERROR_CODES = new Set([
   'move_generation_invalid',
   'move_operation_lease_conflict',
+  'move_state_persist_failed',
   'move_phase_failed',
   'move_target_not_schedulable',
   'target_not_verified',

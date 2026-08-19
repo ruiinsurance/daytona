@@ -144,6 +144,68 @@ describe('WorkspaceMoveService', () => {
     ).rejects.toThrow('move_operation_in_progress')
   })
 
+  it('maps an active-placement unique race to a fixed conflict', async () => {
+    const { service, operationRepository } = makeService()
+    let placementReads = 0
+    operationRepository.findOne.mockImplementation(async ({ where }: any) => {
+      if (where.idempotencyKey) return null
+      if (where.placementId) {
+        placementReads += 1
+        return placementReads === 1 ? null : { phase: 'requested' }
+      }
+      return null
+    })
+    operationRepository.save.mockRejectedValueOnce({ code: '23505', detail: 'database detail must stay private' })
+
+    await expect(service.request({ ...request, idempotencyKey: 'move-race-1' })).rejects.toThrow(
+      'move_operation_in_progress',
+    )
+  })
+
+  it('returns a fixed state-persistence error when phase progress cannot be saved', async () => {
+    const { service, operationRepository } = makeService()
+    await service.request(request)
+    operationRepository.save.mockRejectedValueOnce(new Error('database detail must stay private'))
+
+    await expect(
+      service.run(OPERATION_ID, {
+        quiesce: vi.fn(),
+        checkpoint: vi.fn(),
+        copy: vi.fn(),
+        verifyTarget: vi.fn(),
+        prepareTarget: vi.fn(),
+        startTarget: vi.fn(),
+        retainSource: vi.fn(),
+      } as any),
+    ).rejects.toThrow('move_state_persist_failed')
+  })
+
+  it('returns a fixed state-persistence error when recording a phase failure fails', async () => {
+    const { service, operationRepository } = makeService()
+    await service.request(request)
+    const originalSave = operationRepository.save.getMockImplementation()
+    if (typeof originalSave !== 'function') throw new Error('test_save_implementation_missing')
+    let saveCalls = 0
+    operationRepository.save.mockImplementation(async (value: any) => {
+      if (saveCalls++ === 1) throw new Error('database detail must stay private')
+      return originalSave(value)
+    })
+
+    await expect(
+      service.run(OPERATION_ID, {
+        quiesce: vi.fn(async () => {
+          throw new Error('storage_agent_secret_material')
+        }),
+        checkpoint: vi.fn(),
+        copy: vi.fn(),
+        verifyTarget: vi.fn(),
+        prepareTarget: vi.fn(),
+        startTarget: vi.fn(),
+        retainSource: vi.fn(),
+      } as any),
+    ).rejects.toThrow('move_state_persist_failed')
+  })
+
   it('does not take over an unexpired operation lease owned by another worker', async () => {
     const { service, operations, claimExecutions } = makeService()
     await service.request(request)
@@ -427,7 +489,7 @@ describe('WorkspaceMoveService', () => {
       retainSource: vi.fn(),
     }
 
-    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_phase_failed')
+    await expect(service.run(OPERATION_ID, runtime as any)).rejects.toThrow('move_state_persist_failed')
     expect(operations[0]).toMatchObject({ phase: 'target_verified' })
     expect(placement).toMatchObject({ ownerNodeId: TARGET_NODE_ID, fenceEpoch: '4', localGeneration: '4' })
 

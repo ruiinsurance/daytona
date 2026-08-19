@@ -22,6 +22,7 @@ import { isStorageAgentErrorCode } from '../local-first/storage-agent-error.cont
 import { WorkspacePlacementService } from './workspace-placement.service'
 
 const MOVE_OPERATION_LEASE_MS = 5 * 60 * 1000
+const MOVE_STATE_PERSIST_ERROR = 'move_state_persist_failed'
 
 export interface MoveRuntimeAdapter {
   quiesce(input: MoveRuntimeInput): Promise<void>
@@ -120,8 +121,12 @@ export class WorkspaceMoveService {
           where: { idempotencyKey: input.idempotencyKey },
         })
         if (concurrent) return concurrent
+        const active = await this.operationRepository.findOne({ where: { placementId: input.placementId } })
+        if (active && !isTerminalMovePhase(active.phase)) {
+          throw new ConflictException('move_operation_in_progress')
+        }
       }
-      throw error
+      throw new Error(MOVE_STATE_PERSIST_ERROR)
     }
   }
 
@@ -149,7 +154,7 @@ export class WorkspaceMoveService {
       operation = await this.ensureCheckpointGeneration(operation, now)
       const result = await this.runPhaseResult(operation, runtime.checkpoint, runtime)
       operation.checkpointGeneration = result.generation
-      operation = await this.operationRepository.save(operation)
+      operation = await this.saveOperation(operation)
       operation = await this.persistPhase(operation, 'local_checkpointed', now)
     }
     if (operation.phase === 'local_checkpointed') {
@@ -163,21 +168,17 @@ export class WorkspaceMoveService {
         !/^[a-f0-9]{64}$/.test(result.manifestHash) ||
         result.generation !== operation.checkpointGeneration
       ) {
-        operation.errorCode = 'move_phase_failed'
-        await this.operationRepository.save(operation)
-        throw new Error('move_phase_failed')
+        throw await this.persistError(operation, 'move_phase_failed')
       }
       operation.targetGeneration = result.generation
       operation.targetManifestHash = result.manifestHash
-      operation = await this.operationRepository.save(operation)
+      operation = await this.saveOperation(operation)
       operation = await this.persistPhase(operation, 'target_verified', now)
     }
     if (operation.phase === 'target_verified') {
       const target = await this.storageNodeRepository.findOne({ where: { nodeId: operation.targetNodeId } })
       if (!target || target.state !== StorageNodeState.ACTIVE) {
-        operation.errorCode = 'move_target_not_schedulable'
-        await this.operationRepository.save(operation)
-        throw new Error('move_target_not_schedulable')
+        throw await this.persistError(operation, 'move_target_not_schedulable')
       }
       // Preparation waits on a bounded Runner job. Refresh the control-plane
       // lease immediately before sending the target-side evidence so the
@@ -199,8 +200,7 @@ export class WorkspaceMoveService {
       } else {
         if (!operation.targetGeneration) {
           operation.errorCode = 'move_generation_invalid'
-          await this.operationRepository.save(operation)
-          throw new Error('move_generation_invalid')
+          throw await this.persistError(operation, 'move_generation_invalid')
         }
         try {
           switched = await this.workspacePlacementService.switchOwner({
@@ -218,18 +218,17 @@ export class WorkspaceMoveService {
         } catch (error) {
           const errorCode = this.phaseErrorCode(error)
           operation.errorCode = errorCode
-          await this.operationRepository.save(operation)
-          throw new Error(errorCode)
+          throw await this.persistError(operation, errorCode)
         }
       }
       operation.switchedFenceEpoch = String(switched.fenceEpoch)
       try {
-        operation = await this.operationRepository.save(operation)
-      } catch (error) {
+        operation = await this.saveOperation(operation)
+      } catch {
         // The owner CAS is already durable. Keep the operation at
         // target_verified so a replacement worker can reconcile the switched
         // placement without exposing a raw persistence error.
-        throw new Error(this.phaseErrorCode(error))
+        throw new Error(MOVE_STATE_PERSIST_ERROR)
       }
       operation = await this.persistPhase(operation, 'owner_switched', now)
     }
@@ -240,7 +239,7 @@ export class WorkspaceMoveService {
     if (operation.phase === 'target_started') {
       await this.runPhaseAction(operation, runtime.retainSource, runtime)
       operation.sourceRetained = true
-      operation = await this.operationRepository.save(operation)
+      operation = await this.saveOperation(operation)
       operation = await this.persistPhase(operation, 'source_retained', now)
     }
     if (operation.phase === 'source_retained') {
@@ -267,7 +266,7 @@ export class WorkspaceMoveService {
     operation.phase = next
     operation.errorCode = null
     operation.updatedAt = now
-    return this.operationRepository.save(operation)
+    return this.saveOperation(operation)
   }
 
   private async runPhaseAction(
@@ -279,9 +278,7 @@ export class WorkspaceMoveService {
       await action.call(runtime, this.runtimeInput(operation))
     } catch (error) {
       const errorCode = this.phaseErrorCode(error)
-      operation.errorCode = errorCode
-      await this.operationRepository.save(operation)
-      throw new Error(errorCode)
+      throw await this.persistError(operation, errorCode)
     }
   }
 
@@ -298,9 +295,7 @@ export class WorkspaceMoveService {
       return result
     } catch (error) {
       const errorCode = this.phaseErrorCode(error)
-      operation.errorCode = errorCode
-      await this.operationRepository.save(operation)
-      throw new Error(errorCode)
+      throw await this.persistError(operation, errorCode)
     }
   }
 
@@ -324,13 +319,25 @@ export class WorkspaceMoveService {
     if (operation.checkpointGeneration) return operation
     const placement = await this.placementRepository.findOne({ where: { id: operation.placementId } })
     if (!placement || !/^(0|[1-9][0-9]*)$/.test(placement.localGeneration)) {
-      operation.errorCode = 'move_generation_invalid'
-      await this.operationRepository.save(operation)
-      throw new Error('move_generation_invalid')
+      throw await this.persistError(operation, 'move_generation_invalid')
     }
     operation.checkpointGeneration = (BigInt(placement.localGeneration) + 1n).toString()
     operation.updatedAt = now
-    return this.operationRepository.save(operation)
+    return this.saveOperation(operation)
+  }
+
+  private async saveOperation(operation: WorkspaceOperation): Promise<WorkspaceOperation> {
+    try {
+      return await this.operationRepository.save(operation)
+    } catch {
+      throw new Error(MOVE_STATE_PERSIST_ERROR)
+    }
+  }
+
+  private async persistError(operation: WorkspaceOperation, errorCode: string): Promise<never> {
+    operation.errorCode = errorCode
+    await this.saveOperation(operation)
+    throw new Error(errorCode)
   }
 
   private async claimLease(operation: WorkspaceOperation, now: Date): Promise<WorkspaceOperation> {
