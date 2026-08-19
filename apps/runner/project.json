@@ -8,7 +8,7 @@
     "copy-daemon-bin": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "cp dist/apps/daemon-amd64 {projectRoot}/pkg/daemon/static/daemon-amd64"
+        "command": "test -s dist/apps/daemon-amd64 && cp dist/apps/daemon-amd64 {projectRoot}/pkg/daemon/static/daemon-amd64"
       },
       "cache": true,
       "inputs": [{ "dependentTasksOutputFiles": "**/*", "transitive": true }],
@@ -24,7 +24,7 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "{workspaceRoot}",
-        "command": "cp dist/libs/computer-use-amd64 {projectRoot}/pkg/daemon/static/daytona-computer-use"
+        "command": "test -s dist/libs/computer-use-amd64 && cp dist/libs/computer-use-amd64 {projectRoot}/pkg/daemon/static/daytona-computer-use"
       },
       "cache": true,
       "inputs": [

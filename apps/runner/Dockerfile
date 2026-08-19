@@ -50,6 +50,11 @@ COPY libs/common-go/ libs/common-go/
 COPY libs/api-client-go/ libs/api-client-go/
 COPY libs/computer-use/ libs/computer-use/
 
+# Keep the resource checker in the build stage. The Nx dependency targets
+# materialize the generated assets before the post-build check below runs.
+COPY hack/runner/verify-embedded-assets.sh hack/runner/verify-embedded-assets.sh
+RUN chmod +x hack/runner/verify-embedded-assets.sh
+
 # Pre-built computer-use binary and build script
 COPY dist/libs/computer-use-amd64 dist/libs/computer-use-amd64
 
@@ -61,7 +66,9 @@ RUN GOWORK=off go -C apps/runner mod edit -require google.golang.org/genproto@v0
 
 ARG VERSION=0.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
-  SKIP_COMPUTER_USE_BUILD=true VERSION=$VERSION yarn nx build runner --configuration=production --nxBail=true
+  SKIP_COMPUTER_USE_BUILD=true VERSION=$VERSION yarn nx build runner --configuration=production --nxBail=true --skip-nx-cache
+
+RUN hack/runner/verify-embedded-assets.sh /daytona
 
 FROM docker:28.5.2-dind-alpine3.22 AS runner
 
