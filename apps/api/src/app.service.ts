@@ -192,7 +192,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       role: SystemRole.ADMIN,
     })
     const personalOrg = await this.organizationService.findPersonal(user.id)
-    const { value } = await this.apiKeyService.createApiKey(
+    await this.apiKeyService.createApiKey(
       personalOrg.id,
       user.id,
       DAYTONA_ADMIN_USER_ID,
@@ -200,14 +200,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       undefined,
       this.configService.getOrThrow('admin.apiKey'),
     )
-    this.logger.log(
-      `
-=========================================
-=========================================
-Admin user created with API key: ${value}
-=========================================
-=========================================`,
-    )
+    this.logger.log('Admin user created successfully')
   }
 
   private async initializeTransientRegistry(): Promise<void> {
