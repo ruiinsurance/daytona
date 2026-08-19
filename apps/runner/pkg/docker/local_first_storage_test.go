@@ -108,6 +108,33 @@ func TestLocalFirstMountsRejectMissingConfigAliasAndStaleLease(t *testing.T) {
 	}
 }
 
+func TestLocalFirstMountsRejectNonLocalFirstAliasOverride(t *testing.T) {
+	for _, backend := range []string{"", "legacy-cos"} {
+		t.Run(backend, func(t *testing.T) {
+			root := t.TempDir()
+			volumes := localTestVolumes(time.Now().Add(time.Minute))
+			workspaceSubpath := "sandboxes/" + localTestSandboxID + "/workspace"
+			volumes = append(volumes, dto.VolumeDTO{
+				VolumeId:  testVolumeID,
+				MountPath: localConfigMountPath,
+				Subpath:   &workspaceSubpath,
+				Backend:   backend,
+			})
+			client := &DockerClient{
+				logger:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+				localFirstStorageEnabled: true,
+				localStorageRoot:         root,
+				storageNodeId:            localTestNodeID,
+			}
+
+			_, err := client.getVolumesMountPathBinds(context.Background(), volumes, localTestSandboxID)
+			if err == nil || !strings.Contains(err.Error(), "non-local-first volume") {
+				t.Fatalf("mixed local-first alias error = %v, want non-local-first volume conflict", err)
+			}
+		})
+	}
+}
+
 func TestLocalFirstMountsRejectPersistedStaleFence(t *testing.T) {
 	root := t.TempDir()
 	client := &DockerClient{

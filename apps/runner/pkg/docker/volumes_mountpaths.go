@@ -89,6 +89,13 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 	if hasLocalFirst && (!d.localFirstStorageEnabled || !isCanonicalUUID(d.storageNodeId)) {
 		return nil, fmt.Errorf("local-first storage is not enabled or Runner node identity is missing")
 	}
+	if hasLocalFirst {
+		for _, volume := range volumes {
+			if (volume.MountPath == localWorkspaceMountPath || volume.MountPath == localConfigMountPath) && volume.Backend != localFirstBackend {
+				return nil, fmt.Errorf("local-first mount target %q conflicts with a non-local-first volume", volume.MountPath)
+			}
+		}
+	}
 	localSources, err := resolveLocalFirstMountSources(volumes, d.localStorageRoot, d.storageNodeId, sandboxID, time.Now())
 	if err != nil {
 		return nil, err
