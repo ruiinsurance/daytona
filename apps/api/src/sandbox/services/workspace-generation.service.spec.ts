@@ -309,6 +309,48 @@ describe('WorkspaceGenerationService', () => {
     expect(current.dirty).toBe(true)
   })
 
+  it('redacts a database failure while recording a failed checkpoint', async () => {
+    const { service, generationRepository, workspacePlacementService } = setup()
+    const originalSave = generationRepository.save.getMockImplementation()
+    if (typeof originalSave !== 'function') throw new Error('test_save_implementation_missing')
+    let saveCalls = 0
+    generationRepository.save.mockImplementation(async (value) => {
+      if (saveCalls++ === 1) throw new Error('database detail must stay private')
+      return originalSave(value)
+    })
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source: {
+          create: vi.fn(async () => {
+            throw new Error('checkpoint interruption')
+          }),
+        },
+        store: {} as any,
+      }),
+    ).rejects.toThrow('generation_persist_failed')
+
+    expect(workspacePlacementService.releaseWriterLease).toHaveBeenCalled()
+  })
+
+  it('redacts a database failure while marking a failed upload dirty', async () => {
+    const { service, placementRepository } = setup()
+    placementRepository.save.mockRejectedValueOnce(new Error('database detail must stay private'))
+
+    await expect(
+      service.reconcile({
+        placementId: PLACEMENT_ID,
+        source: { create: vi.fn(async () => checkpoint()) },
+        store: {
+          putObjects: vi.fn(async () => {
+            throw new Error('object_store_unavailable')
+          }),
+        } as any,
+      }),
+    ).rejects.toThrow('generation_persist_failed')
+  })
+
   it('reconciles an object-store outage after checkpointing without changing operation identity', async () => {
     const { service, current, generationRows, generationRepository, placementRepository, workspacePlacementService } =
       setup()

@@ -220,13 +220,13 @@ export class WorkspaceGenerationService {
       generation.manifest = Object.fromEntries(Object.entries(checkpoint.manifest))
       generation.state = WorkspaceGenerationState.CHECKPOINTED
       generation.errorCode = null
-      await this.generationRepository.save(generation)
+      await this.saveGeneration(generation)
 
       let objectStoreCommitted = false
       let latestPublished = false
       try {
         generation.state = WorkspaceGenerationState.UPLOADING
-        await this.generationRepository.save(generation)
+        await this.saveGeneration(generation)
 
         // The store receives only the immutable checkpoint. It must not walk the
         // live workspace or infer a generation from a watcher event.
@@ -246,7 +246,7 @@ export class WorkspaceGenerationService {
 
         generation.state = WorkspaceGenerationState.COMMITTED
         generation.committedAt = input.now ?? new Date()
-        await this.generationRepository.save(generation)
+        await this.saveGeneration(generation)
 
         this.applyCommittedPlacementState({
           placement,
@@ -279,12 +279,7 @@ export class WorkspaceGenerationService {
           }
           throw new Error(FIXED_PERSIST_ERROR)
         }
-        generation.state = WorkspaceGenerationState.FAILED
-        generation.errorCode = FIXED_UPLOAD_ERROR
-        await this.generationRepository.save(generation)
-        placement.replicationStatus = 'failed'
-        placement.dirty = true
-        await this.placementRepository.save(placement)
+        await this.markGenerationFailed(generation, placement, FIXED_UPLOAD_ERROR)
         throw new Error(FIXED_UPLOAD_ERROR)
       }
     } finally {
@@ -303,7 +298,7 @@ export class WorkspaceGenerationService {
       existing.state = WorkspaceGenerationState.CHECKPOINTING
       existing.errorCode = null
       existing.updatedAt = now
-      return this.generationRepository.save(existing)
+      return this.saveGeneration(existing)
     }
 
     const intent = this.generationRepository.create({
@@ -323,7 +318,15 @@ export class WorkspaceGenerationService {
       createdAt: now,
       updatedAt: now,
     })
-    return this.generationRepository.save(intent)
+    return this.saveGeneration(intent)
+  }
+
+  private async saveGeneration(generation: WorkspaceGeneration): Promise<WorkspaceGeneration> {
+    try {
+      return await this.generationRepository.save(generation)
+    } catch {
+      throw new Error(FIXED_PERSIST_ERROR)
+    }
   }
 
   private async markGenerationFailed(
@@ -333,10 +336,14 @@ export class WorkspaceGenerationService {
   ): Promise<void> {
     generation.state = WorkspaceGenerationState.FAILED
     generation.errorCode = errorCode
-    await this.generationRepository.save(generation)
-    placement.replicationStatus = 'failed'
-    placement.dirty = true
-    await this.placementRepository.save(placement)
+    try {
+      await this.saveGeneration(generation)
+      placement.replicationStatus = 'failed'
+      placement.dirty = true
+      await this.placementRepository.save(placement)
+    } catch {
+      throw new Error(FIXED_PERSIST_ERROR)
+    }
   }
 
   private async acquireCheckpointLease(
