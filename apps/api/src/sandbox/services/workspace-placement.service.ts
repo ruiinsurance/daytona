@@ -219,12 +219,15 @@ export class WorkspacePlacementService {
 
   async switchOwner(input: {
     placementId: string
+    sandboxId?: string
     expectedOwnerNodeId: string
+    expectedRunnerId?: string
     expectedFenceEpoch: number
     expectedLocalGeneration: string
     operationId: string
     operationLeaseOwner: string
     targetNodeId: string
+    targetRunnerId?: string
     targetGeneration: string
     targetVerified: boolean
     now?: Date
@@ -244,6 +247,28 @@ export class WorkspacePlacementService {
       BigInt(input.targetGeneration) <= BigInt(input.expectedLocalGeneration)
     ) {
       throw new ConflictException('workspace_generation_conflict')
+    }
+    if (input.sandboxId || input.expectedRunnerId || input.targetRunnerId) {
+      if (!input.sandboxId || !input.expectedRunnerId || !input.targetRunnerId) {
+        throw new BadRequestException('workspace_runner_assignment_invalid')
+      }
+      return this.switchOwnerAndRunner(
+        input as {
+          placementId: string
+          sandboxId: string
+          expectedOwnerNodeId: string
+          expectedRunnerId: string
+          expectedFenceEpoch: number
+          expectedLocalGeneration: string
+          operationId: string
+          operationLeaseOwner: string
+          targetNodeId: string
+          targetRunnerId: string
+          targetGeneration: string
+          targetVerified: boolean
+          now?: Date
+        },
+      )
     }
     const now = input.now ?? new Date()
     const result = await this.placementRepository
@@ -291,6 +316,82 @@ export class WorkspacePlacementService {
     const row = result.raw?.[0] as WorkspacePlacement | undefined
     if (!row) throw new ConflictException('workspace_owner_cas_miss')
     return row
+  }
+
+  private async switchOwnerAndRunner(input: {
+    placementId: string
+    sandboxId: string
+    expectedOwnerNodeId: string
+    expectedRunnerId: string
+    expectedFenceEpoch: number
+    expectedLocalGeneration: string
+    operationId: string
+    operationLeaseOwner: string
+    targetNodeId: string
+    targetRunnerId: string
+    targetGeneration: string
+    targetVerified: boolean
+    now?: Date
+  }): Promise<WorkspacePlacement> {
+    assertUuid(input.sandboxId, 'sandbox_id_invalid')
+    assertUuid(input.expectedRunnerId, 'expected_runner_id_invalid')
+    assertUuid(input.targetRunnerId, 'target_runner_id_invalid')
+
+    const now = input.now ?? new Date()
+    return this.placementRepository.manager.transaction(async (transactionManager) => {
+      const result = await transactionManager
+        .createQueryBuilder()
+        .update(WorkspacePlacement)
+        .set({
+          ownerNodeId: input.targetNodeId,
+          fenceEpoch: () => '"fenceEpoch" + 1',
+          localGeneration: input.targetGeneration,
+          dirty: true,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          updatedAt: now,
+        })
+        .where('id = :placementId', { placementId: input.placementId })
+        .andWhere('"ownerNodeId" = :ownerNodeId', { ownerNodeId: input.expectedOwnerNodeId })
+        .andWhere('"fenceEpoch" = :fenceEpoch', { fenceEpoch: String(input.expectedFenceEpoch) })
+        .andWhere('"localGeneration" = :localGeneration', { localGeneration: input.expectedLocalGeneration })
+        .andWhere(
+          `EXISTS (
+            SELECT 1
+            FROM "workspace_operation" AS operation
+            WHERE operation."id" = :operationId
+              AND operation."placementId" = :placementId
+              AND operation."phase" = 'target_verified'
+              AND operation."leaseOwner" = :operationLeaseOwner
+              AND operation."leaseExpiresAt" > :now
+              AND operation."expectedFenceEpoch" = :operationExpectedFenceEpoch
+              AND operation."sourceNodeId" = :operationSourceNodeId
+              AND operation."targetNodeId" = :operationTargetNodeId
+              AND operation."targetGeneration" = :targetGeneration
+          )`,
+          {
+            operationId: input.operationId,
+            operationLeaseOwner: input.operationLeaseOwner,
+            operationExpectedFenceEpoch: String(input.expectedFenceEpoch),
+            operationSourceNodeId: input.expectedOwnerNodeId,
+            operationTargetNodeId: input.targetNodeId,
+            targetGeneration: input.targetGeneration,
+            now,
+          },
+        )
+        .returning('*')
+        .execute()
+      const row = result.raw?.[0] as WorkspacePlacement | undefined
+      if (!row) throw new ConflictException('workspace_owner_cas_miss')
+
+      const sandboxResult = await transactionManager.update(
+        'sandbox',
+        { id: input.sandboxId, runnerId: input.expectedRunnerId },
+        { prevRunnerId: input.expectedRunnerId, runnerId: input.targetRunnerId },
+      )
+      if (!sandboxResult.affected) throw new ConflictException('workspace_runner_assignment_conflict')
+      return row
+    })
   }
 }
 

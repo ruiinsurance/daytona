@@ -176,9 +176,13 @@ export class WorkspaceMoveService {
       operation = await this.persistPhase(operation, 'target_verified', now)
     }
     if (operation.phase === 'target_verified') {
+      const source = await this.storageNodeRepository.findOne({ where: { nodeId: operation.sourceNodeId } })
       const target = await this.storageNodeRepository.findOne({ where: { nodeId: operation.targetNodeId } })
-      if (!target || target.state !== StorageNodeState.ACTIVE) {
+      if (!source || !target || target.state !== StorageNodeState.ACTIVE) {
         throw await this.persistError(operation, 'move_target_not_schedulable')
+      }
+      if (!source.runnerId || !target.runnerId) {
+        throw await this.persistError(operation, 'workspace_runner_assignment_conflict')
       }
       // Preparation waits on a bounded Runner job. Refresh the control-plane
       // lease immediately before sending the target-side evidence so the
@@ -205,12 +209,15 @@ export class WorkspaceMoveService {
         try {
           switched = await this.workspacePlacementService.switchOwner({
             placementId: operation.placementId,
+            sandboxId: operation.sandboxId,
             expectedOwnerNodeId: operation.sourceNodeId,
+            expectedRunnerId: source.runnerId,
             expectedFenceEpoch: expectedFence,
             expectedLocalGeneration: placement.localGeneration,
             operationId: operation.id,
             operationLeaseOwner: operation.leaseOwner ?? '',
             targetNodeId: operation.targetNodeId,
+            targetRunnerId: target.runnerId,
             targetGeneration: operation.targetGeneration,
             targetVerified: true,
             now: refreshedAt,

@@ -315,6 +315,55 @@ describe('WorkspacePlacementService', () => {
     ).rejects.toThrow('workspace_owner_cas_miss')
   })
 
+  it('switches the workspace owner and sandbox runner assignment in one transaction', async () => {
+    const placementRow = placement({ ownerNodeId: RUNNER_B, fenceEpoch: '4', localGeneration: '4' })
+    const ownerQuery = {
+      update: vi.fn().mockReturnThis(),
+      set: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      andWhere: vi.fn().mockReturnThis(),
+      returning: vi.fn().mockReturnThis(),
+      execute: vi.fn().mockResolvedValue({ raw: [placementRow], affected: 1 }),
+    }
+    const manager = {
+      createQueryBuilder: vi.fn(() => ownerQuery),
+      update: vi.fn().mockResolvedValue({ affected: 1 }),
+      transaction: vi.fn(async (callback: (transactionManager: any) => Promise<unknown>) => callback(manager)),
+    }
+    const repository = {
+      manager,
+      findOne: vi.fn(),
+      create: vi.fn((value) => value),
+      save: vi.fn(async (value) => value),
+    } as any
+    const service = new WorkspacePlacementService(repository, {} as any)
+
+    await expect(
+      service.switchOwner({
+        placementId: PLACEMENT_ID,
+        sandboxId: SANDBOX_ID,
+        expectedOwnerNodeId: RUNNER_A,
+        expectedRunnerId: RUNNER_A,
+        expectedFenceEpoch: 3,
+        expectedLocalGeneration: '3',
+        operationId: OPERATION_ID,
+        operationLeaseOwner: 'move-worker:test',
+        targetNodeId: RUNNER_B,
+        targetRunnerId: RUNNER_B,
+        targetGeneration: '4',
+        targetVerified: true,
+        now: NOW,
+      }),
+    ).resolves.toBe(placementRow)
+
+    expect(manager.transaction).toHaveBeenCalledOnce()
+    expect(manager.update).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: SANDBOX_ID, runnerId: RUNNER_A },
+      { prevRunnerId: RUNNER_A, runnerId: RUNNER_B },
+    )
+  })
+
   it('allows only one concurrent verified owner CAS to advance the fence', async () => {
     let current = placement()
     let executions = 0

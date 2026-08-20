@@ -5,7 +5,7 @@
 
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { In, IsNull, Not } from 'typeorm'
+import { In, IsNull, Not, Repository } from 'typeorm'
 import { randomUUID } from 'crypto'
 
 import { SandboxConflictError } from '../errors/sandbox-conflict.error'
@@ -45,6 +45,7 @@ import { sanitizeSandboxError } from '../utils/sanitize-error.util'
 import { isEphemeral } from '../utils/ephemeral.util'
 import { Sandbox } from '../entities/sandbox.entity'
 import { Runner } from '../entities/runner.entity'
+import { WorkspacePlacement } from '../entities/workspace-placement.entity'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { DockerRegistryService } from '../../docker-registry/services/docker-registry.service'
 import { OrganizationService } from '../../organization/services/organization.service'
@@ -53,7 +54,7 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { BackupManager } from './backup.manager'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { InjectDataSource } from '@nestjs/typeorm'
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 
 export const SYNC_INSTANCE_STATE_LOCK_KEY = 'sync-instance-state-'
@@ -80,6 +81,8 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     private readonly backupManager: BackupManager,
     @InjectRedis() private readonly redis: Redis,
     @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectRepository(WorkspacePlacement)
+    private readonly workspacePlacementRepository: Repository<WorkspacePlacement>,
   ) {
     this.logger.log(
       `Drain mode: ${this.configService.get('draining.mode')} (force=${this.configService.get('draining.force')})`,
@@ -360,7 +363,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
   }
 
   private async migrateStoppedSandboxesOnDrainingRunner(runner: Runner): Promise<void> {
-    const sandboxes = await this.sandboxRepository.find({
+    const candidateSandboxes = await this.sandboxRepository.find({
       where: {
         // Sandboxes without a completed backup are handled by the backup manager.
         runnerId: runner.id,
@@ -371,6 +374,18 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
       },
       take: 100,
     })
+    const localFirstSandboxIds =
+      candidateSandboxes.length === 0
+        ? new Set<string>()
+        : new Set(
+            (
+              await this.workspacePlacementRepository.find({
+                select: ['sandboxId'],
+                where: { sandboxId: In(candidateSandboxes.map((sandbox) => sandbox.id)) },
+              })
+            ).map((placement) => placement.sandboxId),
+          )
+    const sandboxes = candidateSandboxes.filter((sandbox) => !localFirstSandboxIds.has(sandbox.id))
 
     this.logger.debug(`Found ${sandboxes.length} eligible sandboxes on draining runner ${runner.id} for migration`)
 

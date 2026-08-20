@@ -7,6 +7,8 @@ const VOLUME_ID = '33333333-3333-4333-8333-333333333333'
 const SANDBOX_ID = '44444444-4444-4444-8444-444444444444'
 const SOURCE_NODE_ID = '55555555-5555-4555-8555-555555555555'
 const TARGET_NODE_ID = '66666666-6666-4666-8666-666666666666'
+const SOURCE_RUNNER_ID = '77777777-7777-4777-8777-777777777777'
+const TARGET_RUNNER_ID = '88888888-8888-4888-8888-888888888888'
 
 function makeService() {
   const placement = {
@@ -87,7 +89,11 @@ function makeService() {
     findOne: vi.fn(async () => placement),
   }
   const storageNodeRepository = {
-    findOne: vi.fn(async () => ({ nodeId: TARGET_NODE_ID, state: 'active' })),
+    findOne: vi.fn(async ({ where }: any) =>
+      where.nodeId === SOURCE_NODE_ID
+        ? { nodeId: SOURCE_NODE_ID, runnerId: SOURCE_RUNNER_ID, state: 'draining' }
+        : { nodeId: TARGET_NODE_ID, runnerId: TARGET_RUNNER_ID, state: 'active' },
+    ),
   }
   const workspacePlacementService = {
     switchOwner: vi.fn(async () => ({ ...placement, ownerNodeId: TARGET_NODE_ID, fenceEpoch: '4' })),
@@ -300,6 +306,9 @@ describe('WorkspaceMoveService', () => {
         targetVerified: true,
         expectedFenceEpoch: 3,
         expectedLocalGeneration: '3',
+        sandboxId: SANDBOX_ID,
+        expectedRunnerId: SOURCE_RUNNER_ID,
+        targetRunnerId: TARGET_RUNNER_ID,
         targetGeneration: '4',
         operationId: OPERATION_ID,
         operationLeaseOwner: expect.stringMatching(/^move-worker:/),
