@@ -147,19 +147,6 @@ export class WorkspaceGenerationService {
     assertUuid(placement.ownerNodeId, 'owner_node_id_invalid')
 
     const workspaceKey = buildWorkspaceGenerationKey(placement.volumeId, placement.sandboxId, this.generationPrefix)
-    const alreadyCommitted = await this.generationRepository.findOne({
-      where: { placementId: placement.id, generation: placement.localGeneration },
-    })
-    if (alreadyCommitted?.state === WorkspaceGenerationState.COMMITTED) {
-      return this.publishCommittedLatest({
-        placement,
-        generation: placement.localGeneration,
-        workspaceKey,
-        generationRow: alreadyCommitted,
-        store: input.store,
-      })
-    }
-
     const nextGeneration = (localGeneration + 1n).toString()
     const nextGenerationRow = await this.generationRepository.findOne({
       where: { placementId: placement.id, generation: nextGeneration },
@@ -170,6 +157,23 @@ export class WorkspaceGenerationService {
         generation: nextGeneration,
         workspaceKey,
         generationRow: nextGenerationRow,
+        store: input.store,
+      })
+    }
+
+    const alreadyCommitted = await this.generationRepository.findOne({
+      where: { placementId: placement.id, generation: placement.localGeneration },
+    })
+    // A durable workspace becoming dirty is a new local snapshot. A pending
+    // event must therefore advance to the next generation instead of merely
+    // republishing the already committed generation. Committed/failed states
+    // represent an interrupted publish and retain the current-generation retry.
+    if (alreadyCommitted?.state === WorkspaceGenerationState.COMMITTED && placement.replicationStatus !== 'pending') {
+      return this.publishCommittedLatest({
+        placement,
+        generation: placement.localGeneration,
+        workspaceKey,
+        generationRow: alreadyCommitted,
         store: input.store,
       })
     }
