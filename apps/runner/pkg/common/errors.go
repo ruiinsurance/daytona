@@ -11,6 +11,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/daytonaio/runner/internal/util"
+	"github.com/daytonaio/runner/pkg/storageagent"
 	"github.com/gin-gonic/gin"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
@@ -26,7 +27,7 @@ func HandlePossibleDockerError(ctx *gin.Context, err error) common_errors.ErrorR
 			Path:       ctx.Request.URL.Path,
 			Method:     ctx.Request.Method,
 		}
-	} else if errdefs.IsConflict(err) {
+	} else if errdefs.IsConflict(err) || storageagent.IsConflict(err) {
 		return common_errors.ErrorResponse{
 			StatusCode: http.StatusConflict,
 			Message:    fmt.Sprintf("conflict: %s", err.Error()),
