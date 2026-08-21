@@ -664,6 +664,76 @@ describe('WorkspaceGenerationService', () => {
     })
   })
 
+  it('retries a failed next generation instead of republishing the previous committed generation', async () => {
+    const { service, current, generationRows, generationRepository } = setup()
+    current.localGeneration = '1'
+    current.cosGeneration = '1'
+    current.replicationStatus = 'failed'
+    current.dirty = true
+
+    const committed = generationRepository.create({
+      id: '55555555-5555-4555-8555-555555555551',
+      operationId: '66666666-6666-4666-8666-666666666661',
+      placementId: PLACEMENT_ID,
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      generation: '1',
+      state: WorkspaceGenerationState.COMMITTED,
+      sourcePath: 'runner-local-first:test-node',
+      manifestHash: 'a'.repeat(64),
+      objectCount: '1',
+      bytes: '5',
+      manifest: {},
+      errorCode: null,
+      committedAt: new Date('2026-08-17T00:00:00.000Z'),
+    })
+    const failedOperationId = '66666666-6666-4666-8666-666666666662'
+    const failed = generationRepository.create({
+      id: '55555555-5555-4555-8555-555555555552',
+      operationId: failedOperationId,
+      placementId: PLACEMENT_ID,
+      volumeId: VOLUME_ID,
+      sandboxId: SANDBOX_ID,
+      generation: '2',
+      state: WorkspaceGenerationState.FAILED,
+      sourcePath: '/srv/kortix-storage/checkpoints/2',
+      manifestHash: 'b'.repeat(64),
+      objectCount: '1',
+      bytes: '5',
+      manifest: {},
+      errorCode: 'generation_upload_failed',
+      committedAt: null,
+    })
+    generationRows.push(committed, failed)
+
+    const nextCheckpoint = checkpoint()
+    nextCheckpoint.generation = '2'
+    nextCheckpoint.manifest = { ...nextCheckpoint.manifest, generation: '2' }
+    const source = { create: vi.fn().mockResolvedValue(nextCheckpoint) }
+    const store = {
+      putObjects: vi.fn(),
+      putManifest: vi.fn(),
+      readManifest: vi.fn().mockResolvedValue(nextCheckpoint.manifest),
+      putCommittedMarker: vi.fn(),
+      getLatest: vi.fn().mockResolvedValue('1'),
+      compareAndSetLatest: vi.fn().mockResolvedValue(true),
+    }
+
+    await expect(service.reconcile({ placementId: PLACEMENT_ID, source, store })).resolves.toMatchObject({
+      outcome: 'committed',
+      generation: expect.objectContaining({ generation: '2', operationId: failedOperationId }),
+    })
+    expect(source.create).toHaveBeenCalledWith(
+      expect.objectContaining({ nextGeneration: '2', operationId: failedOperationId }),
+    )
+    expect(current).toMatchObject({
+      localGeneration: '2',
+      cosGeneration: '2',
+      dirty: false,
+      replicationStatus: 'durable',
+    })
+  })
+
   it('does not regress local generation when a committed retry observes newer latest', async () => {
     const { service, current, generationRows, generationRepository } = setup()
     current.localGeneration = '1'

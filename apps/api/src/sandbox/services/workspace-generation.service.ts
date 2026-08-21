@@ -165,10 +165,14 @@ export class WorkspaceGenerationService {
       where: { placementId: placement.id, generation: placement.localGeneration },
     })
     // A durable workspace becoming dirty is a new local snapshot. A pending
-    // event must therefore advance to the next generation instead of merely
-    // republishing the already committed generation. Committed/failed states
-    // represent an interrupted publish and retain the current-generation retry.
-    if (alreadyCommitted?.state === WorkspaceGenerationState.COMMITTED && placement.replicationStatus !== 'pending') {
+    // event or an existing next-generation intent must advance/retry that next
+    // generation. Re-publish the current committed generation only when no
+    // newer intent exists and its latest/placement publication was interrupted.
+    if (
+      !nextGenerationRow &&
+      alreadyCommitted?.state === WorkspaceGenerationState.COMMITTED &&
+      placement.replicationStatus !== 'pending'
+    ) {
       return this.publishCommittedLatest({
         placement,
         generation: placement.localGeneration,
