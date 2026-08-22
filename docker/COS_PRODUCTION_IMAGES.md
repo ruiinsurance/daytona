@@ -9,7 +9,7 @@
 本交付只接受以下不可变身份：
 
 ```text
-源提交：2862ea8776372cd5e9e380a6145d2b08ec6128d4
+源提交：70e556d2c548c8964ba7c53cbb01b5587e87d2e6
 版本：  v0.190.0-local-first-2862ea87
 平台：  linux/amd64
 源码：  https://github.com/ruiinsurance/daytona
@@ -75,7 +75,7 @@ docker buildx build --platform linux/amd64 --load
 
 ```text
 org.opencontainers.image.source=https://github.com/ruiinsurance/daytona
-org.opencontainers.image.revision=2862ea8776372cd5e9e380a6145d2b08ec6128d4
+org.opencontainers.image.revision=70e556d2c548c8964ba7c53cbb01b5587e87d2e6
 org.opencontainers.image.version=v0.190.0-local-first-2862ea87
 ```
 

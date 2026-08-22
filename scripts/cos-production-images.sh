@@ -4,7 +4,7 @@
 
 set -Eeuo pipefail
 
-readonly EXPECTED_SOURCE_REVISION='2862ea8776372cd5e9e380a6145d2b08ec6128d4'
+readonly EXPECTED_SOURCE_REVISION='70e556d2c548c8964ba7c53cbb01b5587e87d2e6'
 readonly EXPECTED_IMAGE_TAG='v0.190.0-local-first-2862ea87'
 readonly EXPECTED_PLATFORM='linux/amd64'
 readonly OCI_SOURCE='https://github.com/ruiinsurance/daytona'
