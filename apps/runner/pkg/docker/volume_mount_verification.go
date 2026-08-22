@@ -42,11 +42,7 @@ type filesystemIdentity struct {
 	inode  uint64
 }
 
-func getFilesystemIdentity(path string) (filesystemIdentity, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return filesystemIdentity{}, err
-	}
+func getFilesystemIdentityFromInfo(path string, info os.FileInfo) (filesystemIdentity, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return filesystemIdentity{}, fmt.Errorf("filesystem identity is unavailable for %s", path)
@@ -181,7 +177,14 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 	if err != nil {
 		return 0, err
 	}
-	return filesystemDevice(targetPath)
+	// Lstat keeps /proc/<pid>/root lookups in the sandbox mount namespace.
+	// Stat follows that proc symlink onto the overlay merged dir and reports
+	// the image device instead of the volume bind.
+	info, err := os.Lstat(targetPath)
+	if err != nil {
+		return 0, err
+	}
+	return filesystemDeviceFromInfo(targetPath, info)
 }
 
 func filesystemIdentityInContainerRoot(containerRoot string, mountPath string) (filesystemIdentity, error) {
@@ -189,7 +192,11 @@ func filesystemIdentityInContainerRoot(containerRoot string, mountPath string) (
 	if err != nil {
 		return filesystemIdentity{}, err
 	}
-	return getFilesystemIdentity(targetPath)
+	info, err := os.Lstat(targetPath)
+	if err != nil {
+		return filesystemIdentity{}, err
+	}
+	return getFilesystemIdentityFromInfo(targetPath, info)
 }
 
 func splitContainerPath(path string) []string {

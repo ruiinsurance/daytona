@@ -194,6 +194,18 @@ func TestFilesystemIdentityInContainerRootMatchesWorkspaceThroughAbsoluteConfigS
 	if workspaceID != configID {
 		t.Fatalf("config symlink identity = %+v, want workspace %+v", configID, workspaceID)
 	}
+
+	info, err := os.Lstat(workspace)
+	if err != nil {
+		t.Fatalf("lstat workspace: %v", err)
+	}
+	want, err := getFilesystemIdentityFromInfo(workspace, info)
+	if err != nil {
+		t.Fatalf("identity from workspace lstat: %v", err)
+	}
+	if workspaceID != want {
+		t.Fatalf("container-root identity = %+v, want lstat %+v", workspaceID, want)
+	}
 }
 
 func TestFilesystemDeviceInContainerRootRejectsSymlinkLoop(t *testing.T) {
