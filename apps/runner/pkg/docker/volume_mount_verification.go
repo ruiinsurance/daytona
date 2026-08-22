@@ -115,10 +115,10 @@ func volumeTargetPath(containerRoot string, mountPath string) (string, error) {
 	return targetPath, nil
 }
 
-func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (uint64, error) {
+func resolveContainerTargetPath(containerRoot string, mountPath string) (string, error) {
 	cleanContainerRoot := filepath.Clean(containerRoot)
 	if _, err := volumeTargetPath(cleanContainerRoot, mountPath); err != nil {
-		return 0, err
+		return "", err
 	}
 
 	remaining := splitContainerPath(filepath.Clean(mountPath))
@@ -142,7 +142,7 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 		candidatePath := filepath.Join(append([]string{cleanContainerRoot}, candidateParts...)...)
 		info, err := os.Lstat(candidatePath)
 		if err != nil {
-			return 0, err
+			return "", err
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			resolved = append(resolved, component)
@@ -151,11 +151,11 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 
 		symlinkCount++
 		if symlinkCount > maxContainerTargetSymlinks {
-			return 0, fmt.Errorf("container volume target %q exceeds %d symbolic links", mountPath, maxContainerTargetSymlinks)
+			return "", fmt.Errorf("container volume target %q exceeds %d symbolic links", mountPath, maxContainerTargetSymlinks)
 		}
 		linkTarget, err := os.Readlink(candidatePath)
 		if err != nil {
-			return 0, err
+			return "", err
 		}
 		if filepath.IsAbs(linkTarget) {
 			resolved = resolved[:0]
@@ -164,14 +164,32 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 	}
 
 	targetPath := filepath.Join(append([]string{cleanContainerRoot}, resolved...)...)
-	if len(resolved) == 0 {
-		return filesystemDevice(targetPath)
+	relativePath, err := filepath.Rel(cleanContainerRoot, targetPath)
+	if err != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("volume mount path %q resolves outside container root", mountPath)
 	}
-	info, err := os.Lstat(targetPath)
+	if len(resolved) > 0 {
+		if _, err := os.Lstat(targetPath); err != nil {
+			return "", err
+		}
+	}
+	return targetPath, nil
+}
+
+func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (uint64, error) {
+	targetPath, err := resolveContainerTargetPath(containerRoot, mountPath)
 	if err != nil {
 		return 0, err
 	}
-	return filesystemDeviceFromInfo(targetPath, info)
+	return filesystemDevice(targetPath)
+}
+
+func filesystemIdentityInContainerRoot(containerRoot string, mountPath string) (filesystemIdentity, error) {
+	targetPath, err := resolveContainerTargetPath(containerRoot, mountPath)
+	if err != nil {
+		return filesystemIdentity{}, err
+	}
+	return getFilesystemIdentity(targetPath)
 }
 
 func splitContainerPath(path string) []string {
@@ -228,11 +246,7 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 			if err := validateLocalInspectBind(inspected.Mounts, vol.MountPath, bindSource); err != nil {
 				return err
 			}
-			targetPath, err := containerVolumeTargetPath(inspected.State.Pid, vol.MountPath)
-			if err != nil {
-				return err
-			}
-			identity, err := getFilesystemIdentity(targetPath)
+			identity, err := filesystemIdentityInContainerRoot(containerRoot, vol.MountPath)
 			if err != nil {
 				return fmt.Errorf("inspect container local volume target %s: %w", vol.MountPath, err)
 			}
