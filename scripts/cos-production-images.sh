@@ -4,8 +4,8 @@
 
 set -Eeuo pipefail
 
-readonly EXPECTED_SOURCE_REVISION='38ecad62c7e65d3fc8df6307ebee25cdb866e364'
-readonly EXPECTED_IMAGE_TAG='v0.190.0-cos-38ecad62'
+readonly EXPECTED_SOURCE_REVISION='2862ea8776372cd5e9e380a6145d2b08ec6128d4'
+readonly EXPECTED_IMAGE_TAG='v0.190.0-local-first-2862ea87'
 readonly EXPECTED_PLATFORM='linux/amd64'
 readonly OCI_SOURCE='https://github.com/ruiinsurance/daytona'
 readonly DEFAULT_REPOSITORY_PREFIX='daytona-local'
@@ -23,7 +23,7 @@ BUILD_HTTP_PROXY="${DAYTONA_BUILD_HTTP_PROXY:-}"
 ALPINE_PACKAGE_MIRROR="${DAYTONA_ALPINE_PACKAGE_MIRROR:-}"
 TEMP_ROOT="${TMPDIR:-/tmp}"
 TEMP_ROOT="${TEMP_ROOT%/}"
-OUTPUT_DIR="${DAYTONA_OUTPUT_DIR:-${TEMP_ROOT}/daytona-cos-production-images/${IMAGE_TAG}}"
+OUTPUT_DIR="${DAYTONA_OUTPUT_DIR:-${TEMP_ROOT}/daytona-product-images/${IMAGE_TAG}}"
 
 TEMP_CONTAINER_IDS=('')
 TEMP_DIRS=('')
@@ -75,7 +75,7 @@ trap 'exit 143' TERM
 
 usage() {
   cat <<'EOF'
-Build, verify, and export Daytona COS production images without pushing them.
+Build, verify, and export Daytona local-first V1 production images without pushing them.
 
 Usage:
   scripts/cos-production-images.sh <command> [options]
@@ -94,9 +94,9 @@ Options:
   --build-http-proxy URL      Optional credential-free HTTP(S) build proxy.
   --alpine-package-mirror URL Optional HTTPS mirror for build-only APK packages.
   --output-dir DIRECTORY      Absolute export directory outside this worktree.
-  --tag TAG                   Must be v0.190.0-cos-38ecad62.
+  --tag TAG                   Must be v0.190.0-local-first-2862ea87.
   --platform PLATFORM         Must be linux/amd64.
-  --source-revision SHA       Must be the fixed COS source revision.
+  --source-revision SHA       Must be the fixed local-first V1 source revision.
   -h, --help                  Show this help.
 
 Equivalent environment variables:
@@ -359,7 +359,7 @@ ensure_go_work_sum() {
 build_alpine_builder_image() {
   [[ -n "${ALPINE_PACKAGE_MIRROR}" ]] || return 0
 
-  ALPINE_BUILDER_IMAGE='daytona-build-local/node-alpine-toolchain-amd64:v0.190.0-cos-38ecad62'
+  ALPINE_BUILDER_IMAGE='daytona-build-local/node-alpine-toolchain-amd64:v0.190.0-local-first-2862ea87'
   local context_args=()
   local proxy_args=()
 
@@ -399,7 +399,7 @@ EOF
 
 build_computer_use_artifact() {
   require_file_command
-  local helper_image='daytona-build-local/computer-use-amd64:v0.190.0-cos-38ecad62'
+  local helper_image='daytona-build-local/computer-use-amd64:v0.190.0-local-first-2862ea87'
   local container_id
   local artifact_tmp
   local context_args=()
