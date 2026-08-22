@@ -196,6 +196,7 @@ if TYPE_CHECKING:
     from daytona_api_client_async.models.sandbox_list_sort_direction import SandboxListSortDirection
     from daytona_api_client_async.models.sandbox_list_sort_field import SandboxListSortField
     from daytona_api_client_async.models.sandbox_state import SandboxState
+    from daytona_api_client_async.models.sandbox_storage_backend import SandboxStorageBackend
     from daytona_api_client_async.models.sandbox_volume import SandboxVolume
     from daytona_api_client_async.models.screenshot_response import ScreenshotResponse
     from daytona_api_client_async.models.search_files_response import SearchFilesResponse
@@ -411,6 +412,7 @@ _DYNAMIC_IMPORTS: dict[str, str] = {
     "SandboxListSortDirection": "daytona_api_client_async.models.sandbox_list_sort_direction",
     "SandboxListSortField": "daytona_api_client_async.models.sandbox_list_sort_field",
     "SandboxState": "daytona_api_client_async.models.sandbox_state",
+    "SandboxStorageBackend": "daytona_api_client_async.models.sandbox_storage_backend",
     "SandboxVolume": "daytona_api_client_async.models.sandbox_volume",
     "ScreenshotResponse": "daytona_api_client_async.models.screenshot_response",
     "SearchFilesResponse": "daytona_api_client_async.models.search_files_response",
@@ -640,6 +642,7 @@ __all__ = [
     "SandboxListSortDirection",
     "SandboxListSortField",
     "SandboxState",
+    "SandboxStorageBackend",
     "SandboxVolume",
     "ScreenshotResponse",
     "SearchFilesResponse",

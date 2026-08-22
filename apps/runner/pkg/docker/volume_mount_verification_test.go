@@ -13,6 +13,7 @@ import (
 
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 )
 
 func currentProcessInspectResponse() *container.InspectResponse {
@@ -39,6 +40,51 @@ func prepareVolumeVerificationSource(t *testing.T) (dto.VolumeDTO, string) {
 		t.Fatalf("create bind source: %v", err)
 	}
 	return dto.VolumeDTO{VolumeId: testVolumeID, Subpath: &subpath}, bindSource
+}
+
+func TestValidateLocalInspectBindRequiresExactBindSource(t *testing.T) {
+	bindSource := "/srv/daytona-local-volumes/daytona-volume-11111111-1111-4111-8111-111111111111/sandboxes/22222222-2222-4222-8222-222222222222/workspace"
+	mounts := []container.MountPoint{
+		{Type: mount.TypeBind, Source: bindSource, Destination: "/workspace"},
+	}
+
+	if err := validateLocalInspectBind(mounts, "/workspace", bindSource); err != nil {
+		t.Fatalf("validateLocalInspectBind() error = %v, want exact bind to pass", err)
+	}
+	if err := validateLocalInspectBind(mounts, "/workspace", bindSource+"-other"); err == nil || !strings.Contains(err.Error(), "expected bind source") {
+		t.Fatalf("validateLocalInspectBind() error = %v, want source mismatch", err)
+	}
+	if err := validateLocalInspectBind(mounts, "/config", bindSource); err == nil || !strings.Contains(err.Error(), "not an explicit bind mount") {
+		t.Fatalf("validateLocalInspectBind() error = %v, want missing bind", err)
+	}
+	if err := validateLocalInspectBind([]container.MountPoint{{Type: mount.TypeVolume, Source: bindSource, Destination: "/workspace"}}, "/workspace", bindSource); err == nil || !strings.Contains(err.Error(), "expected bind source") {
+		t.Fatalf("validateLocalInspectBind() error = %v, want non-bind rejection", err)
+	}
+}
+
+func TestVerifyLocalContainerInspectMountsChecksReplacementBinds(t *testing.T) {
+	root := t.TempDir()
+	client := newStartTestDockerClient(nil)
+	client.localVolumeEnabled = true
+	client.localVolumeRoot = root
+	subpath := "sandboxes/22222222-2222-4222-8222-222222222222/workspace"
+	volumes := []dto.VolumeDTO{
+		{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath, Backend: localVolumeBackend},
+		{VolumeId: testVolumeID, MountPath: "/config", Subpath: &subpath, Backend: localVolumeBackend},
+	}
+	bindSource := filepath.Join(root, volumeMountPrefix+testVolumeID, filepath.FromSlash(subpath))
+	inspected := &container.InspectResponse{Mounts: []container.MountPoint{
+		{Type: mount.TypeBind, Source: bindSource, Destination: "/workspace"},
+		{Type: mount.TypeBind, Source: bindSource, Destination: "/config"},
+	}}
+
+	if err := client.verifyLocalContainerInspectMounts(inspected, volumes); err != nil {
+		t.Fatalf("verifyLocalContainerInspectMounts() error = %v, want exact replacement binds to pass", err)
+	}
+	inspected.Mounts[1].Source = bindSource + "-other"
+	if err := client.verifyLocalContainerInspectMounts(inspected, volumes); err == nil || !strings.Contains(err.Error(), "expected bind source") {
+		t.Fatalf("verifyLocalContainerInspectMounts() error = %v, want source mismatch", err)
+	}
 }
 
 func TestVerifyContainerVolumeMountDevicesAcceptsMatchingDevice(t *testing.T) {

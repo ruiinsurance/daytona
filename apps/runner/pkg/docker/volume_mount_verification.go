@@ -15,6 +15,7 @@ import (
 
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 )
 
 const unsafeVolumeStopTimeout = 15 * time.Second
@@ -34,6 +35,58 @@ func filesystemDeviceFromInfo(path string, info os.FileInfo) (uint64, error) {
 		return 0, fmt.Errorf("filesystem device is unavailable for %s", path)
 	}
 	return uint64(stat.Dev), nil
+}
+
+type filesystemIdentity struct {
+	device uint64
+	inode  uint64
+}
+
+func getFilesystemIdentity(path string) (filesystemIdentity, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return filesystemIdentity{}, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return filesystemIdentity{}, fmt.Errorf("filesystem identity is unavailable for %s", path)
+	}
+	return filesystemIdentity{device: uint64(stat.Dev), inode: stat.Ino}, nil
+}
+
+func validateLocalInspectBind(inspectedMounts []container.MountPoint, mountPath, bindSource string) error {
+	for _, inspectedMount := range inspectedMounts {
+		if inspectedMount.Destination != mountPath {
+			continue
+		}
+		if inspectedMount.Type != mount.TypeBind || filepath.Clean(inspectedMount.Source) != filepath.Clean(bindSource) {
+			return fmt.Errorf("container local volume target %s has source %s, expected bind source %s", mountPath, inspectedMount.Source, bindSource)
+		}
+		return nil
+	}
+	return fmt.Errorf("container local volume target %s is not an explicit bind mount", mountPath)
+}
+
+func (d *DockerClient) verifyLocalContainerInspectMounts(inspected *container.InspectResponse, volumes []dto.VolumeDTO) error {
+	if inspected == nil {
+		return fmt.Errorf("container inspect response is missing")
+	}
+	if err := validateLocalVolumePair(volumes); err != nil {
+		return err
+	}
+	for _, volume := range volumes {
+		if volume.Backend != localVolumeBackend {
+			continue
+		}
+		_, bindSource, err := d.resolveVolumeMountPaths(volume)
+		if err != nil {
+			return err
+		}
+		if err := validateLocalInspectBind(inspected.Mounts, volume.MountPath, bindSource); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func containerVolumeTargetPath(pid int, mountPath string) (string, error) {
@@ -133,8 +186,13 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 		return fmt.Errorf("container %s is not running with a valid PID", inspected.ID)
 	}
 
+	if err := validateLocalVolumePair(volumes); err != nil {
+		return err
+	}
+	localTargetIdentities := make(map[string]filesystemIdentity, 2)
+
 	for _, vol := range volumes {
-		baseMountPath, bindSource, err := resolveVolumeMountPaths(vol)
+		baseMountPath, bindSource, err := d.resolveVolumeMountPaths(vol)
 		if err != nil {
 			return err
 		}
@@ -164,6 +222,29 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 		}
 		if containerTargetDevice != bindSourceDevice {
 			return fmt.Errorf("container volume target %s uses device %d, expected bind source device %d", vol.MountPath, containerTargetDevice, bindSourceDevice)
+		}
+
+		if vol.Backend == localVolumeBackend {
+			if err := validateLocalInspectBind(inspected.Mounts, vol.MountPath, bindSource); err != nil {
+				return err
+			}
+			targetPath, err := containerVolumeTargetPath(inspected.State.Pid, vol.MountPath)
+			if err != nil {
+				return err
+			}
+			identity, err := getFilesystemIdentity(targetPath)
+			if err != nil {
+				return fmt.Errorf("inspect container local volume target %s: %w", vol.MountPath, err)
+			}
+			localTargetIdentities[vol.MountPath] = identity
+		}
+	}
+
+	if len(localTargetIdentities) > 0 {
+		workspace, hasWorkspace := localTargetIdentities["/workspace"]
+		config, hasConfig := localTargetIdentities["/config"]
+		if !hasWorkspace || !hasConfig || workspace != config {
+			return fmt.Errorf("container /workspace and /config do not resolve to the same local directory")
 		}
 	}
 

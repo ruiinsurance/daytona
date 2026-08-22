@@ -18,6 +18,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { SandboxEvents } from '../../constants/sandbox-events.constants'
 import { SandboxBackupCreatedEvent } from '../../events/sandbox-backup-created.event'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
+import { allowsBackupLifecycle, shouldClearRunnerOnTerminalState } from '../../local-volume/local-volume.contract'
 
 @Injectable()
 export class SandboxArchiveAction extends SandboxAction {
@@ -50,11 +51,12 @@ export class SandboxArchiveAction extends SandboxAction {
     }
 
     const isFromErrorState = sandbox.state === SandboxState.ERROR
+    const backupRequired = allowsBackupLifecycle(sandbox)
 
     await this.redisLockProvider.unlock(lockKey)
 
     //  if the backup state is error, we need to retry the backup
-    if (sandbox.backupState === BackupState.ERROR) {
+    if (backupRequired && sandbox.backupState === BackupState.ERROR) {
       const archiveErrorRetryKey = 'archive-error-retry-' + sandbox.id
       const archiveErrorRetryCountRaw = await this.redis.get(archiveErrorRetryKey)
       const archiveErrorRetryCount = archiveErrorRetryCountRaw ? parseInt(archiveErrorRetryCountRaw) : 0
@@ -85,12 +87,12 @@ export class SandboxArchiveAction extends SandboxAction {
       return DONT_SYNC_AGAIN
     }
 
-    if (sandbox.backupState !== BackupState.COMPLETED) {
+    if (backupRequired && sandbox.backupState !== BackupState.COMPLETED) {
       return DONT_SYNC_AGAIN
     }
 
-    //  when the backup is completed, destroy the sandbox on the runner
-    //  and deassociate the sandbox from the runner
+    // COS requires a completed backup before container removal. Local storage
+    // survives container removal on its pinned Runner and keeps that owner.
     const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
@@ -105,10 +107,10 @@ export class SandboxArchiveAction extends SandboxAction {
           sandbox,
           SandboxState.ARCHIVED,
           lockCode,
-          null,
+          shouldClearRunnerOnTerminalState(sandbox.storageBackend, 'archived') ? null : undefined,
           undefined,
           undefined,
-          undefined,
+          backupRequired ? undefined : BackupState.NONE,
           false,
         )
         return DONT_SYNC_AGAIN
@@ -137,10 +139,10 @@ export class SandboxArchiveAction extends SandboxAction {
           sandbox,
           SandboxState.ARCHIVED,
           lockCode,
-          null,
+          shouldClearRunnerOnTerminalState(sandbox.storageBackend, 'archived') ? null : undefined,
           undefined,
           undefined,
-          undefined,
+          backupRequired ? undefined : BackupState.NONE,
           false,
         )
         return DONT_SYNC_AGAIN

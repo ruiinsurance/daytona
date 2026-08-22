@@ -43,6 +43,7 @@ import {
   RecoverSandboxDTO,
 } from '@daytona/runner-api-client'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
+import { buildRunnerVolumes } from '../local-volume/local-volume.contract'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -177,11 +178,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
           }
         : undefined,
       entrypoint: entrypoint,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: buildRunnerVolumes(sandbox),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
@@ -250,11 +247,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       memoryQuota: sandbox.mem,
       storageQuota: sandbox.disk,
       env: sandbox.env,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: buildRunnerVolumes(sandbox),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       errorReason: sandbox.errorReason,
@@ -639,16 +632,17 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async resizeSandbox(
-    sandboxId: string,
+    sandbox: Sandbox,
     cpu?: number,
     memory?: number,
     disk?: number,
     registry?: DockerRegistry,
   ): Promise<void> {
-    await this.jobService.createJob(null, JobType.RESIZE_SANDBOX, this.runner.id, ResourceType.SANDBOX, sandboxId, {
+    await this.jobService.createJob(null, JobType.RESIZE_SANDBOX, this.runner.id, ResourceType.SANDBOX, sandbox.id, {
       cpu,
       memory,
       disk,
+      volumes: buildRunnerVolumes(sandbox),
       registry: registry
         ? {
             project: registry.project,
@@ -659,6 +653,6 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         : undefined,
     })
 
-    this.logger.debug(`Created RESIZE_SANDBOX job for sandbox ${sandboxId} on runner ${this.runner.id}`)
+    this.logger.debug(`Created RESIZE_SANDBOX job for sandbox ${sandbox.id} on runner ${this.runner.id}`)
   }
 }

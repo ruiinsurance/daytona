@@ -22,6 +22,7 @@ import io.daytona.api.client.model.BuildInfo;
 import io.daytona.api.client.model.GpuType;
 import io.daytona.api.client.model.SandboxDesiredState;
 import io.daytona.api.client.model.SandboxState;
+import io.daytona.api.client.model.SandboxStorageBackend;
 import io.daytona.api.client.model.SandboxVolume;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -141,6 +142,14 @@ public class SandboxTest {
     @Test
     public void targetTest() {
         // TODO: test target
+    }
+
+    /**
+     * Test the property 'storageBackend'
+     */
+    @Test
+    public void storageBackendTest() {
+        // TODO: test storageBackend
     }
 
     /**

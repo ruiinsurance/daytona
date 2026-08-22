@@ -15,6 +15,7 @@
 
 
 export interface DtoVolumeDTO {
+    'backend'?: string;
     'mountPath'?: string;
     'subpath'?: string;
     'volumeId'?: string;

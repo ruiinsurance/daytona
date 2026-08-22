@@ -24,6 +24,7 @@ from daytona_api_client.models.build_info import BuildInfo
 from daytona_api_client.models.gpu_type import GpuType
 from daytona_api_client.models.sandbox_desired_state import SandboxDesiredState
 from daytona_api_client.models.sandbox_state import SandboxState
+from daytona_api_client.models.sandbox_storage_backend import SandboxStorageBackend
 from daytona_api_client.models.sandbox_volume import SandboxVolume
 from pydantic import TypeAdapter
 from typing import Optional, Set
@@ -47,6 +48,7 @@ class Sandbox(BaseModel):
     network_allow_list: Optional[StrictStr] = Field(default=None, description="Comma-separated list of allowed CIDR network addresses for the sandbox", serialization_alias="networkAllowList")
     domain_allow_list: Optional[StrictStr] = Field(default=None, description="Comma-separated list of allowed domains for the sandbox", serialization_alias="domainAllowList")
     target: StrictStr = Field(description="The target environment for the sandbox")
+    storage_backend: SandboxStorageBackend = Field(description="Persisted storage backend for the sandbox", serialization_alias="storageBackend")
     cpu: Union[StrictFloat, StrictInt] = Field(description="The CPU quota for the sandbox")
     gpu: Union[StrictFloat, StrictInt] = Field(description="The GPU quota for the sandbox")
     gpu_type: Optional[GpuType] = Field(default=None, description="The GPU type assigned to the sandbox", serialization_alias="gpuType")
@@ -72,7 +74,7 @@ class Sandbox(BaseModel):
     linked_sandbox_id: Optional[StrictStr] = Field(default=None, description="ID of the sandbox this sandbox is linked to. When set, the sandbox is co-located on the same runner as the linked sandbox.", serialization_alias="linkedSandboxId")
     toolbox_proxy_url: StrictStr = Field(description="The toolbox proxy URL for the sandbox", serialization_alias="toolboxProxyUrl")
     additional_properties: Dict[str, Any] = {}
-    __properties: ClassVar[List[str]] = ["id", "organizationId", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "cpu", "gpu", "gpuType", "memory", "disk", "state", "desiredState", "errorReason", "recoverable", "backupState", "backupCreatedAt", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "createdAt", "updatedAt", "lastActivityAt", "sandboxClass", "daemonVersion", "runnerId", "linkedSandboxId", "toolboxProxyUrl"]
+    __properties: ClassVar[List[str]] = ["id", "organizationId", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "storageBackend", "cpu", "gpu", "gpuType", "memory", "disk", "state", "desiredState", "errorReason", "recoverable", "backupState", "backupCreatedAt", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "createdAt", "updatedAt", "lastActivityAt", "sandboxClass", "daemonVersion", "runnerId", "linkedSandboxId", "toolboxProxyUrl"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -153,6 +155,7 @@ class Sandbox(BaseModel):
             "network_allow_list": obj.get("networkAllowList"),
             "domain_allow_list": obj.get("domainAllowList"),
             "target": obj.get("target"),
+            "storage_backend": obj.get("storageBackend"),
             "cpu": obj.get("cpu"),
             "gpu": obj.get("gpu"),
             "gpu_type": obj.get("gpuType"),

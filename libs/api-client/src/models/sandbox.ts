@@ -27,6 +27,9 @@ import type { SandboxDesiredState } from './sandbox-desired-state';
 import type { SandboxState } from './sandbox-state';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { SandboxStorageBackend } from './sandbox-storage-backend';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { SandboxVolume } from './sandbox-volume';
 
 export interface Sandbox {
@@ -78,6 +81,10 @@ export interface Sandbox {
      * The target environment for the sandbox
      */
     'target': string;
+    /**
+     * Persisted storage backend for the sandbox
+     */
+    'storageBackend': SandboxStorageBackend;
     /**
      * The CPU quota for the sandbox
      */

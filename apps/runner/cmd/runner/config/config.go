@@ -42,6 +42,8 @@ type Config struct {
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
 	AWSVolumeLayout                    string        `envconfig:"AWS_VOLUME_LAYOUT" default:"per-volume-bucket" validate:"oneof=per-volume-bucket single-bucket-prefix"`
 	AWSVolumePrefix                    string        `envconfig:"AWS_VOLUME_PREFIX" validate:"required_if=AWSVolumeLayout single-bucket-prefix"`
+	LocalVolumeEnabled                 bool          `envconfig:"LOCAL_VOLUME_BACKEND_ENABLED" default:"false"`
+	LocalVolumeRoot                    string        `envconfig:"LOCAL_VOLUME_ROOT" default:"/srv/daytona-local-volumes"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`

@@ -166,6 +166,7 @@ models/sandbox-list-item.ts
 models/sandbox-list-sort-direction.ts
 models/sandbox-list-sort-field.ts
 models/sandbox-state.ts
+models/sandbox-storage-backend.ts
 models/sandbox-volume.ts
 models/sandbox.ts
 models/screenshot-response.ts

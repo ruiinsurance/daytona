@@ -28,7 +28,7 @@ import { OpenFeature } from '@openfeature/server-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { resolveGpuTypePreferences } from '../utils/gpu-type-preferences.util'
-import { RunnerService } from './runner.service'
+import { GetRunnerParams, RunnerService } from './runner.service'
 import { SandboxError } from '../../exceptions/sandbox-error.exception'
 import { StateChangeInProgressError } from '../../exceptions/state-change-in-progress.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
@@ -36,6 +36,7 @@ import { Cron, CronExpression } from '@nestjs/schedule'
 import { BackupState } from '../enums/backup-state.enum'
 import { Snapshot } from '../entities/snapshot.entity'
 import { SnapshotState } from '../enums/snapshot-state.enum'
+import { SnapshotRunnerState } from '../enums/snapshot-runner-state.enum'
 import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/sandbox.constants'
 import { SandboxWarmPoolService } from './sandbox-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -113,6 +114,13 @@ import {
 import { SandboxLookupCacheInvalidationService } from './sandbox-lookup-cache-invalidation.service'
 import { Region } from '../../region/entities/region.entity'
 import { SandboxActivityService } from './sandbox-activity.service'
+import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
+import {
+  assertLocalOwnerAvailable,
+  allowsAutomaticOwnerChange,
+  buildRunnerVolumes,
+  isLocalVolumeSandbox,
+} from '../local-volume/local-volume.contract'
 import { ListSandboxesResponseDto } from '../dto/list-sandboxes-response.dto'
 import { ListSandboxesQueryDto } from '../dto/list-sandboxes-query.dto'
 import { SANDBOX_SEARCH_ADAPTER } from '../constants/sandbox-tokens'
@@ -466,6 +474,7 @@ export class SandboxService {
     let sandboxClass: SandboxClass | undefined
 
     const region = await this.getValidatedOrDefaultRegion(organization, createSandboxDto.target)
+    const storageBackend = this.getCreateStorageBackend(createSandboxDto)
 
     try {
       let snapshotIdOrName = createSandboxDto.snapshot
@@ -512,6 +521,10 @@ export class SandboxService {
 
       if (!snapshot.ref) {
         throw new BadRequestError('Snapshot ref is not defined')
+      }
+
+      if (storageBackend === SandboxStorageBackend.LOCAL && snapshot.sandboxClass !== SandboxClass.CONTAINER) {
+        throw new BadRequestError('Local volume backend is only supported for container-class sandboxes')
       }
 
       const cpu = snapshot.cpu
@@ -573,7 +586,12 @@ export class SandboxService {
       // runner for their lifetime and are auto-deleted on first stop. Skip the
       // warm-pool path entirely so we always provision a fresh container on a
       // currently-unoccupied GPU runner.
-      if (gpu <= 0 && !linkedSandbox && (!createSandboxDto.volumes || createSandboxDto.volumes.length === 0)) {
+      if (
+        storageBackend !== SandboxStorageBackend.LOCAL &&
+        gpu <= 0 &&
+        !linkedSandbox &&
+        (!createSandboxDto.volumes || createSandboxDto.volumes.length === 0)
+      ) {
         const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${snapshot.id}`)) === 1
 
         if (!skipWarmPool) {
@@ -609,6 +627,7 @@ export class SandboxService {
       }
 
       let runner: Runner
+      let snapshotReady = true
       if (linkedSandbox && linkedSandbox.runnerId) {
         runner = await this.runnerService.findOneOrFail(linkedSandbox.runnerId)
 
@@ -619,19 +638,32 @@ export class SandboxService {
         }
 
         this.runnerService.assertRunnerCanHost(runner)
+        if (storageBackend === SandboxStorageBackend.LOCAL && !runner.localVolumeEnabled) {
+          throw new BadRequestError('Runner hosting linked sandbox does not support local volumes')
+        }
+        if (storageBackend === SandboxStorageBackend.LOCAL) {
+          const snapshotRunner = await this.runnerService.getSnapshotRunner(runner.id, snapshot.ref)
+          snapshotReady = snapshotRunner?.state === SnapshotRunnerState.READY
+        }
       } else {
-        runner = await this.runnerService.getRandomAvailableRunner({
-          regions: [region.id],
-          sandboxClass: snapshot.sandboxClass,
-          snapshotRef: snapshot.ref,
-          gpu,
-          gpuType,
-        })
+        const placement = await this.getInitialRunnerPlacement(
+          {
+            regions: [region.id],
+            sandboxClass: snapshot.sandboxClass,
+            snapshotRef: snapshot.ref,
+            gpu,
+            gpuType,
+          },
+          storageBackend,
+        )
+        runner = placement.runner
+        snapshotReady = placement.snapshotReady
       }
 
-      const sandbox = new Sandbox({ region: region.id, name: createSandboxDto.name })
+      const sandbox = new Sandbox({ id: createSandboxDto.id, region: region.id, name: createSandboxDto.name })
 
       sandbox.organizationId = organization.id
+      sandbox.storageBackend = storageBackend
 
       sandbox.sandboxClass = snapshot.sandboxClass
       sandbox.snapshot = snapshot.name
@@ -675,8 +707,12 @@ export class SandboxService {
       if (resolvedVolumes !== undefined) {
         sandbox.volumes = resolvedVolumes
       }
+      this.validateCreateVolumes(sandbox)
 
       sandbox.runnerId = runner.id
+      if (!snapshotReady) {
+        sandbox.state = SandboxState.PULLING_SNAPSHOT
+      }
       sandbox.linkedSandboxId = linkedSandbox?.id ?? null
       sandbox.pending = true
 
@@ -855,6 +891,7 @@ export class SandboxService {
     let gpuRunnerAssignmentLockKey: string | undefined
 
     const region = await this.getValidatedOrDefaultRegion(organization, createSandboxDto.target)
+    const storageBackend = this.getCreateStorageBackend(createSandboxDto)
 
     try {
       const cpu = createSandboxDto.cpu || DEFAULT_CPU
@@ -904,9 +941,10 @@ export class SandboxService {
       // Resolve volume names to UUIDs, failing fast on invalid references
       const resolvedVolumes = await this.resolveVolumes(organization.id, createSandboxDto.volumes)
 
-      const sandbox = new Sandbox({ region: region.id, name: createSandboxDto.name })
+      const sandbox = new Sandbox({ id: createSandboxDto.id, region: region.id, name: createSandboxDto.name })
 
       sandbox.organizationId = organization.id
+      sandbox.storageBackend = storageBackend
 
       sandbox.sandboxClass = SandboxClass.CONTAINER
       sandbox.osUser = createSandboxDto.user || 'daytona'
@@ -946,6 +984,7 @@ export class SandboxService {
       if (resolvedVolumes !== undefined) {
         sandbox.volumes = resolvedVolumes
       }
+      this.validateCreateVolumes(sandbox)
 
       if (sandbox.sandboxClass !== SandboxClass.CONTAINER) {
         throw new BadRequestError('Declarative builds are only supported for container-class sandboxes')
@@ -981,21 +1020,31 @@ export class SandboxService {
                 sandbox.cpu,
               )
             : []
-        runner = await this.runnerService.getRandomAvailableRunner({
-          regions: [sandbox.region],
-          sandboxClass: sandbox.sandboxClass,
-          snapshotRef: buildInfoSnapshotRef,
-          gpu: sandbox.gpu,
-          gpuType: gpuTypePreferences ?? null,
-          ...(excludedRunnerIds.length > 0 && { excludedRunnerIds }),
-          ...(declarativeBuildScoreThreshold !== undefined && {
-            availabilityScoreThreshold: declarativeBuildScoreThreshold,
-          }),
-        })
+        const placement = await this.getInitialRunnerPlacement(
+          {
+            regions: [sandbox.region],
+            sandboxClass: sandbox.sandboxClass,
+            snapshotRef: buildInfoSnapshotRef,
+            gpu: sandbox.gpu,
+            gpuType: gpuTypePreferences ?? null,
+            ...(excludedRunnerIds.length > 0 && { excludedRunnerIds }),
+            ...(declarativeBuildScoreThreshold !== undefined && {
+              availabilityScoreThreshold: declarativeBuildScoreThreshold,
+            }),
+          },
+          storageBackend,
+        )
+        runner = placement.runner
 
         sandbox.runnerId = runner.id
         sandbox.gpuType = sandbox.gpu > 0 ? runner.gpuType : null
+        if (!placement.snapshotReady) {
+          sandbox.state = SandboxState.PENDING_BUILD
+        }
       } catch (error) {
+        if (storageBackend === SandboxStorageBackend.LOCAL) {
+          throw error
+        }
         if (
           error instanceof BadRequestError == false ||
           !error.message.startsWith('No available runners') ||
@@ -1068,6 +1117,10 @@ export class SandboxService {
 
   async createBackup(sandboxIdOrName: string, organizationId?: string): Promise<Sandbox> {
     const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organizationId)
+
+    if (isLocalVolumeSandbox(sandbox)) {
+      throw new SandboxError('Local volume sandbox backups are not supported in V1')
+    }
 
     if (isEphemeral(sandbox)) {
       throw new SandboxError('Ephemeral sandboxes cannot be backed up')
@@ -1319,6 +1372,9 @@ export class SandboxService {
       }
 
       const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
+      if (isLocalVolumeSandbox(sandbox)) {
+        assertLocalOwnerAvailable(sandbox, runner)
+      }
 
       if (sandbox.sandboxClass === SandboxClass.WINDOWS) {
         if (includeMemory && sandbox.state !== SandboxState.STARTED) {
@@ -2057,6 +2113,11 @@ export class SandboxService {
         return sandbox
       }
 
+      if (isLocalVolumeSandbox(sandbox)) {
+        const owner = sandbox.runnerId ? await this.runnerService.findOne(sandbox.runnerId) : null
+        assertLocalOwnerAvailable(sandbox, owner)
+      }
+
       this.assertSandboxNotErrored(sandbox)
 
       const wasPaused = sandbox.state === SandboxState.PAUSED
@@ -2088,6 +2149,11 @@ export class SandboxService {
       }
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      if (isLocalVolumeSandbox(sandbox)) {
+        const owner = sandbox.runnerId ? await this.runnerService.findOne(sandbox.runnerId) : null
+        assertLocalOwnerAvailable(sandbox, owner)
+      }
 
       const { pendingCpuIncremented, pendingMemoryIncremented, pendingDiskIncremented, pendingGpuIncremented } =
         await this.validateOrganizationQuotas(
@@ -2266,9 +2332,15 @@ export class SandboxService {
 
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
+      if (isLocalVolumeSandbox(sandbox)) {
+        const owner = sandbox.runnerId ? await this.runnerService.findOne(sandbox.runnerId) : null
+        assertLocalOwnerAvailable(sandbox, owner)
+      }
+
       // API-level recoverable errors (e.g. timeouts) bypass the runner and restore
       // from backup on a new runner, provided a completed backup exists.
       if (
+        allowsAutomaticOwnerChange(sandbox) &&
         isApiRecoverableError(sandbox.errorReason) &&
         sandbox.backupState === BackupState.COMPLETED &&
         sandbox.backupSnapshot &&
@@ -2511,6 +2583,14 @@ export class SandboxService {
         throw new BadRequestError('No resource changes specified - sandbox is already at the desired configuration')
       }
 
+      if (!sandbox.runnerId) {
+        throw new BadRequestError('Sandbox has no runner assigned')
+      }
+      const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
+      if (isLocalVolumeSandbox(sandbox)) {
+        assertLocalOwnerAvailable(sandbox, runner)
+      }
+
       // Validate organization quotas for the new resource values
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
@@ -2584,13 +2664,6 @@ export class SandboxService {
         }
       }
 
-      // Get runner and validate before changing state
-      if (!sandbox.runnerId) {
-        throw new BadRequestError('Sandbox has no runner assigned')
-      }
-
-      const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
-
       // Capture the previous state before transitioning to RESIZING (STARTED or STOPPED)
       const previousState =
         sandbox.state === SandboxState.STARTED
@@ -2626,7 +2699,7 @@ export class SandboxService {
           )
         }
 
-        await runnerAdapter.resizeSandbox(sandbox.id, resizeDto.cpu, resizeDto.memory, resizeDto.disk, backupRegistry)
+        await runnerAdapter.resizeSandbox(sandbox, resizeDto.cpu, resizeDto.memory, resizeDto.disk, backupRegistry)
 
         // For V0 runners, update resources immediately (subscriber emits STATE_UPDATED)
         // For V2 runners, job handler will update resources on completion
@@ -3363,6 +3436,54 @@ export class SandboxService {
     }
 
     return resolved
+  }
+
+  private getCreateStorageBackend(createSandboxDto: CreateSandboxDto): SandboxStorageBackend {
+    const storageBackend = createSandboxDto.storageBackend ?? SandboxStorageBackend.COS
+    if (storageBackend === SandboxStorageBackend.LOCAL) {
+      if (this.configService.get('localVolume.enabled') !== true) {
+        throw new BadRequestError('Local volume backend is disabled')
+      }
+      if (!createSandboxDto.id) {
+        throw new BadRequestError('Local volume sandbox requires a stable sandbox ID')
+      }
+    }
+    return storageBackend
+  }
+
+  private async getInitialRunnerPlacement(
+    params: GetRunnerParams,
+    storageBackend: SandboxStorageBackend,
+  ): Promise<{ runner: Runner; snapshotReady: boolean }> {
+    const localVolumeEnabled = storageBackend === SandboxStorageBackend.LOCAL ? true : undefined
+    try {
+      const runner = await this.runnerService.getRandomAvailableRunner({ ...params, localVolumeEnabled })
+      return { runner, snapshotReady: true }
+    } catch (error) {
+      if (
+        storageBackend !== SandboxStorageBackend.LOCAL ||
+        params.snapshotRef === undefined ||
+        !(error instanceof BadRequestError) ||
+        !error.message.startsWith('No available runners')
+      ) {
+        throw error
+      }
+
+      const runner = await this.runnerService.getRandomAvailableRunner({
+        ...params,
+        snapshotRef: undefined,
+        localVolumeEnabled: true,
+      })
+      return { runner, snapshotReady: false }
+    }
+  }
+
+  private validateCreateVolumes(sandbox: Sandbox): void {
+    try {
+      buildRunnerVolumes(sandbox)
+    } catch (error) {
+      throw new BadRequestError(error instanceof Error ? error.message : 'Invalid local volume configuration')
+    }
   }
 
   async createSshAccess(

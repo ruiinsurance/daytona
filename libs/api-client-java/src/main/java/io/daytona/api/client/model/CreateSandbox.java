@@ -21,6 +21,7 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import io.daytona.api.client.model.CreateBuildInfo;
 import io.daytona.api.client.model.GpuType;
+import io.daytona.api.client.model.SandboxStorageBackend;
 import io.daytona.api.client.model.SandboxVolume;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -28,6 +29,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -57,6 +59,11 @@ import io.daytona.api.client.JSON;
  */
 @javax.annotation.Generated(value = "org.openapitools.codegen.languages.JavaClientCodegen", comments = "Generator version: 7.21.0")
 public class CreateSandbox {
+  public static final String SERIALIZED_NAME_ID = "id";
+  @SerializedName(SERIALIZED_NAME_ID)
+  @javax.annotation.Nullable
+  private UUID id;
+
   public static final String SERIALIZED_NAME_NAME = "name";
   @SerializedName(SERIALIZED_NAME_NAME)
   @javax.annotation.Nullable
@@ -106,6 +113,11 @@ public class CreateSandbox {
   @SerializedName(SERIALIZED_NAME_TARGET)
   @javax.annotation.Nullable
   private String target;
+
+  public static final String SERIALIZED_NAME_STORAGE_BACKEND = "storageBackend";
+  @SerializedName(SERIALIZED_NAME_STORAGE_BACKEND)
+  @javax.annotation.Nullable
+  private SandboxStorageBackend storageBackend = SandboxStorageBackend.COS;
 
   public static final String SERIALIZED_NAME_CPU = "cpu";
   @SerializedName(SERIALIZED_NAME_CPU)
@@ -164,6 +176,25 @@ public class CreateSandbox {
 
   public CreateSandbox() {
   }
+
+  public CreateSandbox id(@javax.annotation.Nullable UUID id) {
+    this.id = id;
+    return this;
+  }
+
+  /**
+   * Stable sandbox identity supplied by a trusted control plane
+   * @return id
+   */
+  @javax.annotation.Nullable
+  public UUID getId() {
+    return id;
+  }
+
+  public void setId(@javax.annotation.Nullable UUID id) {
+    this.id = id;
+  }
+
 
   public CreateSandbox name(@javax.annotation.Nullable String name) {
     this.name = name;
@@ -368,6 +399,25 @@ public class CreateSandbox {
 
   public void setTarget(@javax.annotation.Nullable String target) {
     this.target = target;
+  }
+
+
+  public CreateSandbox storageBackend(@javax.annotation.Nullable SandboxStorageBackend storageBackend) {
+    this.storageBackend = storageBackend;
+    return this;
+  }
+
+  /**
+   * Storage backend for this sandbox. Local storage must be enabled by the operator.
+   * @return storageBackend
+   */
+  @javax.annotation.Nullable
+  public SandboxStorageBackend getStorageBackend() {
+    return storageBackend;
+  }
+
+  public void setStorageBackend(@javax.annotation.Nullable SandboxStorageBackend storageBackend) {
+    this.storageBackend = storageBackend;
   }
 
 
@@ -650,7 +700,8 @@ public class CreateSandbox {
       return false;
     }
     CreateSandbox createSandbox = (CreateSandbox) o;
-    return Objects.equals(this.name, createSandbox.name) &&
+    return Objects.equals(this.id, createSandbox.id) &&
+        Objects.equals(this.name, createSandbox.name) &&
         Objects.equals(this.snapshot, createSandbox.snapshot) &&
         Objects.equals(this.user, createSandbox.user) &&
         Objects.equals(this.env, createSandbox.env) &&
@@ -660,6 +711,7 @@ public class CreateSandbox {
         Objects.equals(this.networkAllowList, createSandbox.networkAllowList) &&
         Objects.equals(this.domainAllowList, createSandbox.domainAllowList) &&
         Objects.equals(this.target, createSandbox.target) &&
+        Objects.equals(this.storageBackend, createSandbox.storageBackend) &&
         Objects.equals(this.cpu, createSandbox.cpu) &&
         Objects.equals(this.gpu, createSandbox.gpu) &&
         Objects.equals(this.gpuType, createSandbox.gpuType) &&
@@ -676,13 +728,14 @@ public class CreateSandbox {
 
   @Override
   public int hashCode() {
-    return Objects.hash(name, snapshot, user, env, labels, _public, networkBlockAll, networkAllowList, domainAllowList, target, cpu, gpu, gpuType, memory, disk, autoStopInterval, autoArchiveInterval, autoDeleteInterval, volumes, buildInfo, linkedSandbox, additionalProperties);
+    return Objects.hash(id, name, snapshot, user, env, labels, _public, networkBlockAll, networkAllowList, domainAllowList, target, storageBackend, cpu, gpu, gpuType, memory, disk, autoStopInterval, autoArchiveInterval, autoDeleteInterval, volumes, buildInfo, linkedSandbox, additionalProperties);
   }
 
   @Override
   public String toString() {
     StringBuilder sb = new StringBuilder();
     sb.append("class CreateSandbox {\n");
+    sb.append("    id: ").append(toIndentedString(id)).append("\n");
     sb.append("    name: ").append(toIndentedString(name)).append("\n");
     sb.append("    snapshot: ").append(toIndentedString(snapshot)).append("\n");
     sb.append("    user: ").append(toIndentedString(user)).append("\n");
@@ -693,6 +746,7 @@ public class CreateSandbox {
     sb.append("    networkAllowList: ").append(toIndentedString(networkAllowList)).append("\n");
     sb.append("    domainAllowList: ").append(toIndentedString(domainAllowList)).append("\n");
     sb.append("    target: ").append(toIndentedString(target)).append("\n");
+    sb.append("    storageBackend: ").append(toIndentedString(storageBackend)).append("\n");
     sb.append("    cpu: ").append(toIndentedString(cpu)).append("\n");
     sb.append("    gpu: ").append(toIndentedString(gpu)).append("\n");
     sb.append("    gpuType: ").append(toIndentedString(gpuType)).append("\n");
@@ -723,7 +777,7 @@ public class CreateSandbox {
 
   static {
     // a set of all properties/fields (JSON key names)
-    openapiFields = new HashSet<String>(Arrays.asList("name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "cpu", "gpu", "gpuType", "memory", "disk", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "linkedSandbox"));
+    openapiFields = new HashSet<String>(Arrays.asList("id", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "storageBackend", "cpu", "gpu", "gpuType", "memory", "disk", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "linkedSandbox"));
 
     // a set of required properties/fields (JSON key names)
     openapiRequiredFields = new HashSet<String>(0);
@@ -742,6 +796,9 @@ public class CreateSandbox {
         }
       }
         JsonObject jsonObj = jsonElement.getAsJsonObject();
+      if ((jsonObj.get("id") != null && !jsonObj.get("id").isJsonNull()) && !jsonObj.get("id").isJsonPrimitive()) {
+        throw new IllegalArgumentException(String.format(java.util.Locale.ROOT, "Expected the field `id` to be a primitive type in the JSON string but got `%s`", jsonObj.get("id").toString()));
+      }
       if ((jsonObj.get("name") != null && !jsonObj.get("name").isJsonNull()) && !jsonObj.get("name").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format(java.util.Locale.ROOT, "Expected the field `name` to be a primitive type in the JSON string but got `%s`", jsonObj.get("name").toString()));
       }
@@ -759,6 +816,10 @@ public class CreateSandbox {
       }
       if ((jsonObj.get("target") != null && !jsonObj.get("target").isJsonNull()) && !jsonObj.get("target").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format(java.util.Locale.ROOT, "Expected the field `target` to be a primitive type in the JSON string but got `%s`", jsonObj.get("target").toString()));
+      }
+      // validate the optional field `storageBackend`
+      if (jsonObj.get("storageBackend") != null && !jsonObj.get("storageBackend").isJsonNull()) {
+        SandboxStorageBackend.validateJsonElement(jsonObj.get("storageBackend"));
       }
       // ensure the optional json data is an array if present
       if (jsonObj.get("gpuType") != null && !jsonObj.get("gpuType").isJsonNull() && !jsonObj.get("gpuType").isJsonArray()) {

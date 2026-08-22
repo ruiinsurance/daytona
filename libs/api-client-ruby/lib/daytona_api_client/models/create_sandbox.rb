@@ -15,6 +15,9 @@ require 'time'
 
 module DaytonaApiClient
   class CreateSandbox < ApiModelBase
+    # Stable sandbox identity supplied by a trusted control plane
+    attr_accessor :id
+
     # The name of the sandbox. If not provided, the sandbox ID will be used as the name
     attr_accessor :name
 
@@ -44,6 +47,9 @@ module DaytonaApiClient
 
     # The target (region) where the sandbox will be created
     attr_accessor :target
+
+    # Storage backend for this sandbox. Local storage must be enabled by the operator.
+    attr_accessor :storage_backend
 
     # CPU cores allocated to the sandbox
     attr_accessor :cpu
@@ -78,9 +84,32 @@ module DaytonaApiClient
     # ID or name of an existing sandbox to link the new sandbox to. The new sandbox will be scheduled on the same runner as the linked sandbox so a local network can be established between them. Linked sandboxes must be ephemeral (autoDeleteInterval=0) and cannot themselves be linked to another sandbox.
     attr_accessor :linked_sandbox
 
+    class EnumAttributeValidator
+      attr_reader :datatype
+      attr_reader :allowable_values
+
+      def initialize(datatype, allowable_values)
+        @allowable_values = allowable_values.map do |value|
+          case datatype.to_s
+          when /Integer/i
+            value.to_i
+          when /Float/i
+            value.to_f
+          else
+            value
+          end
+        end
+      end
+
+      def valid?(value)
+        !value || allowable_values.include?(value)
+      end
+    end
+
     # Attribute mapping from ruby-style variable name to JSON key.
     def self.attribute_map
       {
+        :'id' => :'id',
         :'name' => :'name',
         :'snapshot' => :'snapshot',
         :'user' => :'user',
@@ -91,6 +120,7 @@ module DaytonaApiClient
         :'network_allow_list' => :'networkAllowList',
         :'domain_allow_list' => :'domainAllowList',
         :'target' => :'target',
+        :'storage_backend' => :'storageBackend',
         :'cpu' => :'cpu',
         :'gpu' => :'gpu',
         :'gpu_type' => :'gpuType',
@@ -118,6 +148,7 @@ module DaytonaApiClient
     # Attribute type mapping.
     def self.openapi_types
       {
+        :'id' => :'String',
         :'name' => :'String',
         :'snapshot' => :'String',
         :'user' => :'String',
@@ -128,6 +159,7 @@ module DaytonaApiClient
         :'network_allow_list' => :'String',
         :'domain_allow_list' => :'String',
         :'target' => :'String',
+        :'storage_backend' => :'SandboxStorageBackend',
         :'cpu' => :'Integer',
         :'gpu' => :'Integer',
         :'gpu_type' => :'Array<GpuType>',
@@ -163,6 +195,10 @@ module DaytonaApiClient
         end
         h[k.to_sym] = v
       }
+
+      if attributes.key?(:'id')
+        self.id = attributes[:'id']
+      end
 
       if attributes.key?(:'name')
         self.name = attributes[:'name']
@@ -206,6 +242,10 @@ module DaytonaApiClient
 
       if attributes.key?(:'target')
         self.target = attributes[:'target']
+      end
+
+      if attributes.key?(:'storage_backend')
+        self.storage_backend = attributes[:'storage_backend']
       end
 
       if attributes.key?(:'cpu')
@@ -277,6 +317,7 @@ module DaytonaApiClient
     def ==(o)
       return true if self.equal?(o)
       self.class == o.class &&
+          id == o.id &&
           name == o.name &&
           snapshot == o.snapshot &&
           user == o.user &&
@@ -287,6 +328,7 @@ module DaytonaApiClient
           network_allow_list == o.network_allow_list &&
           domain_allow_list == o.domain_allow_list &&
           target == o.target &&
+          storage_backend == o.storage_backend &&
           cpu == o.cpu &&
           gpu == o.gpu &&
           gpu_type == o.gpu_type &&
@@ -309,7 +351,7 @@ module DaytonaApiClient
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [name, snapshot, user, env, labels, public, network_block_all, network_allow_list, domain_allow_list, target, cpu, gpu, gpu_type, memory, disk, auto_stop_interval, auto_archive_interval, auto_delete_interval, volumes, build_info, linked_sandbox].hash
+      [id, name, snapshot, user, env, labels, public, network_block_all, network_allow_list, domain_allow_list, target, storage_backend, cpu, gpu, gpu_type, memory, disk, auto_stop_interval, auto_archive_interval, auto_delete_interval, volumes, build_info, linked_sandbox].hash
     end
 
     # Builds the object from hash

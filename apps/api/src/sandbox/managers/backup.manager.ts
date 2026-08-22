@@ -44,6 +44,8 @@ import { JobType } from '../enums/job-type.enum'
 import { ResourceType } from '../enums/resource-type.enum'
 import { JobStateHandlerService } from '../services/job-state-handler.service'
 import { SandboxConflictError } from '../errors/sandbox-conflict.error'
+import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
+import { allowsBackupLifecycle } from '../local-volume/local-volume.contract'
 
 @Injectable()
 export class BackupManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -149,6 +151,7 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
           const sandboxes = await this.sandboxRepository.find({
             where: {
               runnerId: runner.id,
+              storageBackend: Not(SandboxStorageBackend.LOCAL),
               organizationId: Not(SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
               state: SandboxState.STARTED,
               desiredState: Not(SandboxDesiredState.DESTROYED),
@@ -215,6 +218,9 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .innerJoin('runner', 'r', 'r.id = sandbox.runnerId')
         .where('sandbox.state IN (:...states)', {
           states: [SandboxState.ARCHIVING, SandboxState.STARTED, SandboxState.STOPPED],
+        })
+        .andWhere('sandbox."storageBackend" != :localStorageBackend', {
+          localStorageBackend: SandboxStorageBackend.LOCAL,
         })
         .andWhere('sandbox.backupState IN (:...backupStates)', {
           backupStates: [BackupState.PENDING],
@@ -337,6 +343,9 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .where('sandbox.state IN (:...states)', {
           states: [SandboxState.ARCHIVING, SandboxState.STARTED, SandboxState.STOPPED],
         })
+        .andWhere('sandbox."storageBackend" != :localStorageBackend', {
+          localStorageBackend: SandboxStorageBackend.LOCAL,
+        })
         .andWhere('sandbox.backupState IN (:...backupStates)', {
           backupStates: [BackupState.IN_PROGRESS],
         })
@@ -421,6 +430,9 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .createQueryBuilder('sandbox')
         .innerJoin('runner', 'r', 'r.id = sandbox.runnerId')
         .where('sandbox.state = :error', { error: SandboxState.ERROR })
+        .andWhere('sandbox."storageBackend" != :localStorageBackend', {
+          localStorageBackend: SandboxStorageBackend.LOCAL,
+        })
         .andWhere('sandbox.backupState IN (:...backupStates)', {
           backupStates: [BackupState.PENDING, BackupState.IN_PROGRESS],
         })
@@ -511,6 +523,9 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .createQueryBuilder('sandbox')
         .innerJoin('runner', 'r', 'r.id = sandbox.runnerId')
         .where('sandbox.state IN (:...states)', { states: [SandboxState.ARCHIVING, SandboxState.STOPPED] })
+        .andWhere('sandbox."storageBackend" != :localStorageBackend', {
+          localStorageBackend: SandboxStorageBackend.LOCAL,
+        })
         .andWhere('sandbox.backupState = :none', { none: BackupState.NONE })
         .andWhere('sandbox.desiredState != :destroyed', { destroyed: SandboxDesiredState.DESTROYED })
         .andWhere('r.state = :ready', { ready: RunnerState.READY })
@@ -560,6 +575,7 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
 
       const staleSandboxes = await this.sandboxRepository.find({
         where: {
+          storageBackend: Not(SandboxStorageBackend.LOCAL),
           backupState: BackupState.IN_PROGRESS,
           desiredState: Not(SandboxDesiredState.DESTROYED),
           updatedAt: LessThan(twoHoursAgo),
@@ -596,6 +612,10 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
   }
 
   async setBackupPending(sandbox: Sandbox): Promise<void> {
+    if (!allowsBackupLifecycle(sandbox)) {
+      throw new BadRequestError('Local volume sandbox backups are not supported in V1')
+    }
+
     if (sandbox.backupState === BackupState.COMPLETED) {
       return
     }
@@ -669,6 +689,10 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
   }
 
   private async checkBackupProgress(sandbox: Sandbox): Promise<void> {
+    if (!allowsBackupLifecycle(sandbox)) {
+      throw new BadRequestError('Local volume sandbox backups are not supported in V1')
+    }
+
     try {
       const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
 
@@ -804,6 +828,10 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
   }
 
   private async handlePendingBackup(sandbox: Sandbox): Promise<void> {
+    if (!allowsBackupLifecycle(sandbox)) {
+      throw new BadRequestError('Local volume sandbox backups are not supported in V1')
+    }
+
     const lockKey = `runner-${sandbox.runnerId}-backup-lock`
     try {
       await this.redisLockProvider.waitForLock(lockKey, 10)
@@ -885,6 +913,9 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
         .createQueryBuilder('sandbox')
         .addSelect('RANDOM()', 'rand')
         .where('sandbox.backupState = :error', { error: BackupState.ERROR })
+        .andWhere('sandbox."storageBackend" != :localStorageBackend', {
+          localStorageBackend: SandboxStorageBackend.LOCAL,
+        })
         .andWhere('sandbox.desiredState != :destroyed', { destroyed: SandboxDesiredState.DESTROYED })
         .andWhere('sandbox.updatedAt < :cutoff', { cutoff })
         .andWhere(
@@ -943,18 +974,21 @@ export class BackupManager implements TrackableJobExecutions, OnApplicationShutd
   @OnEvent(SandboxEvents.ARCHIVED)
   @TrackJobExecution()
   private async handleSandboxArchivedEvent(event: SandboxArchivedEvent) {
-    this.setBackupPending(event.sandbox)
+    if (!allowsBackupLifecycle(event.sandbox)) return
+    await this.setBackupPending(event.sandbox)
   }
 
   @OnEvent(SandboxEvents.DESTROYED)
   @TrackJobExecution()
   private async handleSandboxDestroyedEvent(event: SandboxDestroyedEvent) {
-    this.deleteSandboxBackupRepositoryFromRegistry(event.sandbox)
+    if (!allowsBackupLifecycle(event.sandbox)) return
+    await this.deleteSandboxBackupRepositoryFromRegistry(event.sandbox)
   }
 
   @OnEvent(SandboxEvents.BACKUP_CREATED)
   @TrackJobExecution()
   private async handleSandboxBackupCreatedEvent(event: SandboxBackupCreatedEvent) {
-    this.setBackupPending(event.sandbox)
+    if (!allowsBackupLifecycle(event.sandbox)) return
+    await this.setBackupPending(event.sandbox)
   }
 }

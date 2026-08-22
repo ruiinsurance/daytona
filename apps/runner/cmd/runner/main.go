@@ -152,6 +152,8 @@ func run() int {
 		AWSDefaultBucket:             cfg.AWSDefaultBucket,
 		AWSVolumeLayout:              cfg.AWSVolumeLayout,
 		AWSVolumePrefix:              cfg.AWSVolumePrefix,
+		LocalVolumeEnabled:           cfg.LocalVolumeEnabled,
+		LocalVolumeRoot:              cfg.LocalVolumeRoot,
 		DaemonPath:                   daemonPath,
 		ComputerUsePluginPath:        pluginPath,
 		NetRulesManager:              netRulesManager,
@@ -239,6 +241,7 @@ func run() int {
 		MetricsCollector:   metricsCollector,
 		NetRulesManager:    netRulesManager,
 		SSHGatewayService:  sshGatewayService,
+		LocalVolumeEnabled: cfg.LocalVolumeEnabled,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)
@@ -247,15 +250,16 @@ func run() int {
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
-			Interval:   cfg.HealthcheckInterval,
-			Timeout:    cfg.HealthcheckTimeout,
-			Collector:  metricsCollector,
-			Logger:     logger,
-			Domain:     cfg.Domain,
-			ApiPort:    cfg.ApiPort,
-			ProxyPort:  cfg.ApiPort,
-			TlsEnabled: cfg.EnableTLS,
-			Docker:     dockerClient,
+			Interval:           cfg.HealthcheckInterval,
+			Timeout:            cfg.HealthcheckTimeout,
+			Collector:          metricsCollector,
+			Logger:             logger,
+			Domain:             cfg.Domain,
+			ApiPort:            cfg.ApiPort,
+			ProxyPort:          cfg.ApiPort,
+			TlsEnabled:         cfg.EnableTLS,
+			Docker:             dockerClient,
+			LocalVolumeEnabled: cfg.LocalVolumeEnabled,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)

@@ -215,6 +215,61 @@ func TestStartFailsClosedWhenPersistedVolumeMetadataIsMalformed(t *testing.T) {
 	}
 }
 
+func TestStartRejectsWrongLocalBindBeforeContainerStart(t *testing.T) {
+	const sandboxID = "22222222-2222-4222-8222-222222222222"
+	root := t.TempDir()
+	subpath := "sandboxes/" + sandboxID + "/workspace"
+	bindSource := filepath.Join(root, volumeMountPrefix+testVolumeID, filepath.FromSlash(subpath))
+	var startCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1.51/containers/" + sandboxID + "/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{
+  "Id": %q,
+  "State": {"Status": "exited", "Running": false, "ExitCode": 0},
+  "Config": {"Entrypoint": ["/usr/local/bin/daytona-daemon"], "WorkingDir": ""},
+  "Mounts": [
+    {"Type": "bind", "Source": %q, "Destination": "/workspace"},
+    {"Type": "bind", "Source": %q, "Destination": "/config"}
+  ],
+  "NetworkSettings": {"Networks": {}}
+}`, sandboxID, bindSource, bindSource+"-wrong")
+		case "/v1.51/containers/" + sandboxID + "/start":
+			startCalls.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	apiClient, err := client.NewClientWithOpts(
+		client.WithHost(server.URL),
+		client.WithHTTPClient(server.Client()),
+		client.WithVersion("1.51"),
+	)
+	if err != nil {
+		t.Fatalf("create Docker API client: %v", err)
+	}
+	t.Cleanup(func() { _ = apiClient.Close() })
+
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeEnabled = true
+	dockerClient.localVolumeRoot = root
+	metadata := map[string]string{
+		"volumes": `[{"volumeId":"` + testVolumeID + `","mountPath":"/workspace","subpath":"` + subpath + `","backend":"local"},{"volumeId":"` + testVolumeID + `","mountPath":"/config","subpath":"` + subpath + `","backend":"local"}]`,
+	}
+
+	_, _, err = dockerClient.Start(context.Background(), sandboxID, nil, metadata)
+	if err == nil || !strings.Contains(err.Error(), "verify local volume binds before start") {
+		t.Fatalf("Start() error = %v, want pre-start local bind verification failure", err)
+	}
+	if startCalls.Load() != 0 {
+		t.Fatalf("ContainerStart calls = %d, want 0 after pre-start local bind mismatch", startCalls.Load())
+	}
+}
+
 func TestStartStopsNewlyStartedContainerWhenVolumeTargetUsesWrongDevice(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)

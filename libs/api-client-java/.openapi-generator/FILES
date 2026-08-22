@@ -183,6 +183,7 @@ src/main/java/io/daytona/api/client/model/SandboxListItem.java
 src/main/java/io/daytona/api/client/model/SandboxListSortDirection.java
 src/main/java/io/daytona/api/client/model/SandboxListSortField.java
 src/main/java/io/daytona/api/client/model/SandboxState.java
+src/main/java/io/daytona/api/client/model/SandboxStorageBackend.java
 src/main/java/io/daytona/api/client/model/SandboxVolume.java
 src/main/java/io/daytona/api/client/model/ScreenshotResponse.java
 src/main/java/io/daytona/api/client/model/SearchFilesResponse.java
@@ -383,6 +384,7 @@ src/test/java/io/daytona/api/client/model/SandboxListItemTest.java
 src/test/java/io/daytona/api/client/model/SandboxListSortDirectionTest.java
 src/test/java/io/daytona/api/client/model/SandboxListSortFieldTest.java
 src/test/java/io/daytona/api/client/model/SandboxStateTest.java
+src/test/java/io/daytona/api/client/model/SandboxStorageBackendTest.java
 src/test/java/io/daytona/api/client/model/SandboxTest.java
 src/test/java/io/daytona/api/client/model/SandboxVolumeTest.java
 src/test/java/io/daytona/api/client/model/ScreenshotResponseTest.java

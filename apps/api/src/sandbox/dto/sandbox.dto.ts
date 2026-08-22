@@ -12,6 +12,7 @@ import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { BuildInfoDto } from './build-info.dto'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { GpuType } from '../enums/gpu-type.enum'
+import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 
 @ApiSchema({ name: 'SandboxVolume' })
 export class SandboxVolume {
@@ -120,6 +121,13 @@ export class SandboxDto {
     example: 'local',
   })
   target: string
+
+  @ApiProperty({
+    description: 'Persisted storage backend for the sandbox',
+    enum: SandboxStorageBackend,
+    enumName: 'SandboxStorageBackend',
+  })
+  storageBackend: SandboxStorageBackend
 
   @ApiProperty({
     description: 'The CPU quota for the sandbox',
@@ -323,6 +331,7 @@ export class SandboxDto {
       organizationId: sandbox.organizationId,
       name: sandbox.name,
       target: sandbox.region,
+      storageBackend: sandbox.storageBackend,
       snapshot: sandbox.snapshot,
       user: sandbox.osUser,
       env: sandbox.env,

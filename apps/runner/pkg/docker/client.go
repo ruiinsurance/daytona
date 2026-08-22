@@ -30,6 +30,8 @@ type DockerClientConfig struct {
 	AWSDefaultBucket             string
 	AWSVolumeLayout              string
 	AWSVolumePrefix              string
+	LocalVolumeEnabled           bool
+	LocalVolumeRoot              string
 	DaemonPath                   string
 	ComputerUsePluginPath        string
 	NetRulesManager              *netrules.NetRulesManager
@@ -73,6 +75,11 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 	if config.AndroidBootTimeoutSec <= 0 {
 		logger.Warn("Invalid android boot timeout value. Using default value of 300 seconds")
 		config.AndroidBootTimeoutSec = 300
+	}
+	if config.LocalVolumeEnabled {
+		if _, err := validateLocalVolumeRoot(config.LocalVolumeRoot); err != nil {
+			return nil, err
+		}
 	}
 
 	if config.BackupTimeoutMin <= 0 {
@@ -150,6 +157,8 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		awsDefaultBucket:             config.AWSDefaultBucket,
 		awsVolumeLayout:              config.AWSVolumeLayout,
 		awsVolumePrefix:              config.AWSVolumePrefix,
+		localVolumeEnabled:           config.LocalVolumeEnabled,
+		localVolumeRoot:              config.LocalVolumeRoot,
 		volumeMutexes:                make(map[string]*sync.Mutex),
 		daemonPath:                   config.DaemonPath,
 		computerUsePluginPath:        config.ComputerUsePluginPath,
@@ -209,6 +218,8 @@ type DockerClient struct {
 	awsDefaultBucket             string
 	awsVolumeLayout              string
 	awsVolumePrefix              string
+	localVolumeEnabled           bool
+	localVolumeRoot              string
 	volumeMutexes                map[string]*sync.Mutex
 	volumeMutexesMutex           sync.Mutex
 	daemonPath                   string

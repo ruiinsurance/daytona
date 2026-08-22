@@ -1743,6 +1743,12 @@
         },
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/dto.VolumeDTO"
+          }
         }
       }
     },
@@ -1934,6 +1940,9 @@
     "dto.VolumeDTO": {
       "type": "object",
       "properties": {
+        "backend": {
+          "type": "string"
+        },
         "mountPath": {
           "type": "string"
         },
