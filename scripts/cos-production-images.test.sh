@@ -70,10 +70,10 @@ plan=$(bash "${SCRIPT}" plan \
   --output-dir "${plan_output}")
 
 for expected in \
-  'api\tproduct\tregistry.example.com/ruiinsurance/daytona-api:v0.190.0-cos-38ecad62\tlinux/amd64\tapps/api/Dockerfile\tdaytona' \
-  'runner\tbase\tregistry.example.com/ruiinsurance/daytona-runner-base:v0.190.0-cos-38ecad62\tlinux/amd64\tapps/runner/Dockerfile\trunner' \
-  'proxy\tproduct\tregistry.example.com/ruiinsurance/daytona-proxy:v0.190.0-cos-38ecad62\tlinux/amd64\tapps/proxy/Dockerfile\tproxy' \
-  'ssh-gateway\tproduct\tregistry.example.com/ruiinsurance/daytona-ssh-gateway:v0.190.0-cos-38ecad62\tlinux/amd64\tapps/ssh-gateway/Dockerfile\tssh-gateway'
+  'api\tproduct\tregistry.example.com/ruiinsurance/daytona-api:v0.190.0-local-first-2862ea87\tlinux/amd64\tapps/api/Dockerfile\tdaytona' \
+  'runner\tbase\tregistry.example.com/ruiinsurance/daytona-runner-base:v0.190.0-local-first-2862ea87\tlinux/amd64\tapps/runner/Dockerfile\trunner' \
+  'proxy\tproduct\tregistry.example.com/ruiinsurance/daytona-proxy:v0.190.0-local-first-2862ea87\tlinux/amd64\tapps/proxy/Dockerfile\tproxy' \
+  'ssh-gateway\tproduct\tregistry.example.com/ruiinsurance/daytona-ssh-gateway:v0.190.0-local-first-2862ea87\tlinux/amd64\tapps/ssh-gateway/Dockerfile\tssh-gateway'
 do
   if printf '%s\n' "${plan}" | grep -Fq "$(printf '%b' "${expected}")"; then
     pass "plan contains ${expected%%\\t*} identity"
@@ -100,6 +100,12 @@ else
   fail 'plan reports an enabled Alpine package mirror without printing its URL'
 fi
 
+if printf '%s\n' "${plan}" | grep -Fq $'source_revision\t2862ea8776372cd5e9e380a6145d2b08ec6128d4'; then
+  pass 'plan reports the immutable local-first V1 source revision'
+else
+  fail 'plan reports the immutable local-first V1 source revision'
+fi
+
 expect_failure \
   'empty repository prefix is rejected' \
   'repository prefix must not be empty' \
@@ -107,8 +113,13 @@ expect_failure \
 
 expect_failure \
   'mutable latest tag is rejected' \
-  'image tag must equal v0.190.0-cos-38ecad62' \
+  'image tag must equal v0.190.0-local-first-2862ea87' \
   env DAYTONA_IMAGE_TAG=latest bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/latest"
+
+expect_failure \
+  'legacy COS image tag is rejected' \
+  'image tag must equal v0.190.0-local-first-2862ea87' \
+  env DAYTONA_IMAGE_TAG=v0.190.0-cos-38ecad62 bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/legacy-tag"
 
 expect_failure \
   'non-amd64 platform is rejected' \
@@ -117,8 +128,14 @@ expect_failure \
 
 expect_failure \
   'wrong source revision is rejected' \
-  'source revision must equal 38ecad62c7e65d3fc8df6307ebee25cdb866e364' \
+  'source revision must equal 2862ea8776372cd5e9e380a6145d2b08ec6128d4' \
   env DAYTONA_SOURCE_REVISION=deadbeef bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/revision"
+
+expect_failure \
+  'legacy COS source revision is rejected' \
+  'source revision must equal 2862ea8776372cd5e9e380a6145d2b08ec6128d4' \
+  env DAYTONA_SOURCE_REVISION=38ecad62c7e65d3fc8df6307ebee25cdb866e364 \
+  bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/legacy-revision"
 
 expect_failure \
   'repository output directory is rejected' \
@@ -356,10 +373,10 @@ case "${1:-}" in
         printf 'https://github.com/ruiinsurance/daytona\n'
         ;;
       '{{index .Config.Labels "org.opencontainers.image.revision"}}')
-        printf '38ecad62c7e65d3fc8df6307ebee25cdb866e364\n'
+        printf '2862ea8776372cd5e9e380a6145d2b08ec6128d4\n'
         ;;
       '{{index .Config.Labels "org.opencontainers.image.version"}}')
-        printf 'v0.190.0-cos-38ecad62\n'
+        printf 'v0.190.0-local-first-2862ea87\n'
         ;;
       '{{json .Config.Entrypoint}}')
         case "${reference}" in

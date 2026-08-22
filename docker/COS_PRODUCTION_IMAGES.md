@@ -1,16 +1,16 @@
-# Daytona COS 生产镜像交付
+# Daytona Local-First V1 生产镜像交付
 
-本文档说明如何从固定 COS 源提交构建、核验和分包导出 Daytona v0.190.0 的四个 `linux/amd64` 产品镜像。交付脚本默认只在本地加载镜像，不登录 registry，也不执行 push。
+本文档说明如何从固定 local-first V1 源提交构建、核验和分包导出 Daytona v0.190.0 的四个 `linux/amd64` 产品镜像。该源码同时保留旧 COS sandbox 兼容性。交付脚本默认只在本地加载镜像，不登录 registry，也不执行 push。
 
-> **禁止直接部署 base Runner：** `daytona-runner-base` 只包含 Daytona 的基础 Runner。它没有腾讯云 COS 正式环境需要的 `s3fs-fuse` 和 `mount-s3 --prefix` wrapper。最终生产 Runner 必须等待 `ruiinsurance/suna-enterprise#468`，由 Suna 的 `infra/daytona/runner/Dockerfile` 基于本镜像添加这些组件。
+> **禁止直接部署 base Runner：** `daytona-runner-base` 包含 local volume backend，但没有旧 COS sandbox 所需的 `s3fs-fuse` 和 `mount-s3 --prefix` wrapper。最终候选 Runner 必须由 Suna 的 `infra/daytona/runner/Dockerfile` 基于本镜像添加这些组件，才能同时支持 local-first 与旧 COS sandbox。
 
 ## 固定身份
 
 本交付只接受以下不可变身份：
 
 ```text
-源提交：38ecad62c7e65d3fc8df6307ebee25cdb866e364
-版本：  v0.190.0-cos-38ecad62
+源提交：2862ea8776372cd5e9e380a6145d2b08ec6128d4
+版本：  v0.190.0-local-first-2862ea87
 平台：  linux/amd64
 源码：  https://github.com/ruiinsurance/daytona
 ```
@@ -30,7 +30,7 @@ Runner Dockerfile 还依赖 `dist/libs/computer-use-amd64`。脚本会先复用�
 
 - Docker daemon 可用。
 - Docker Buildx builder 声明支持 `linux/amd64`。
-- Git worktree 包含固定源提交，并且产品源码相对该提交没有未声明修改。
+- Git worktree 包含固定 V1 源提交，并且产品源码相对该提交没有未声明修改。
 - 有足够空间同时容纳 BuildKit 缓存、本地镜像和四个独立 tar。
 - 输出目录是 worktree 外部的绝对路径，并且在 export 前不存在；脚本会解析已有父目录的物理路径，拒绝通过符号链接绕回 worktree。
 
@@ -43,16 +43,16 @@ Runner Dockerfile 还依赖 `dist/libs/computer-use-amd64`。脚本会先复用�
 ```bash
 ./scripts/cos-production-images.sh plan \
   --repository-prefix daytona-local \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 计划应包含以下本地引用：
 
 ```text
-daytona-local/daytona-api:v0.190.0-cos-38ecad62
-daytona-local/daytona-runner-base:v0.190.0-cos-38ecad62
-daytona-local/daytona-proxy:v0.190.0-cos-38ecad62
-daytona-local/daytona-ssh-gateway:v0.190.0-cos-38ecad62
+daytona-local/daytona-api:v0.190.0-local-first-2862ea87
+daytona-local/daytona-runner-base:v0.190.0-local-first-2862ea87
+daytona-local/daytona-proxy:v0.190.0-local-first-2862ea87
+daytona-local/daytona-ssh-gateway:v0.190.0-local-first-2862ea87
 ```
 
 ## 构建
@@ -62,7 +62,7 @@ daytona-local/daytona-ssh-gateway:v0.190.0-cos-38ecad62
 ```bash
 ./scripts/cos-production-images.sh build \
   --repository-prefix daytona-local \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 每个产品构建都显式使用：
@@ -75,8 +75,8 @@ docker buildx build --platform linux/amd64 --load
 
 ```text
 org.opencontainers.image.source=https://github.com/ruiinsurance/daytona
-org.opencontainers.image.revision=38ecad62c7e65d3fc8df6307ebee25cdb866e364
-org.opencontainers.image.version=v0.190.0-cos-38ecad62
+org.opencontainers.image.revision=2862ea8776372cd5e9e380a6145d2b08ec6128d4
+org.opencontainers.image.version=v0.190.0-local-first-2862ea87
 ```
 
 重复执行 `build` 会复用 BuildKit 缓存并覆盖相同的不可变本地 tag，但不会删除其他镜像或缓存。产品 Dockerfile 当前引用带版本但未固定 digest 的基础镜像；因此每次实际交付仍应以 `IMAGE-MANIFEST.tsv` 中记录的 image ID 和 tar checksum 为准。
@@ -87,7 +87,7 @@ org.opencontainers.image.version=v0.190.0-cos-38ecad62
 ./scripts/cos-production-images.sh build \
   --repository-prefix daytona-local \
   --base-image-prefix public.ecr.aws/docker/library \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 如果 Docker build container 访问 Debian/Ubuntu 软件源过慢或超时，还可以传入操作者已建立的、无内嵌凭据的 HTTP(S) build proxy：
@@ -97,7 +97,7 @@ org.opencontainers.image.version=v0.190.0-cos-38ecad62
   --repository-prefix daytona-local \
   --base-image-prefix public.ecr.aws/docker/library \
   --build-http-proxy http://host.docker.internal:3128 \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 代理值只作为 BuildKit 预定义的 `http_proxy` build argument 传入，不写入交付 manifest，脚本的 `plan` 也只显示启用状态。脚本拒绝含用户名或密码的代理 URL；代理的建立、信任与关闭由操作者在构建流程外负责。
@@ -110,7 +110,7 @@ org.opencontainers.image.version=v0.190.0-cos-38ecad62
   --base-image-prefix public.ecr.aws/docker/library \
   --build-http-proxy http://host.docker.internal:3128 \
   --alpine-package-mirror https://mirrors.cloud.tencent.com/alpine \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 该选项只生成一个不交付的 `linux/amd64` Node builder helper，通过 Alpine 的包签名校验安装产品 Dockerfile 原本声明的 `python3`、`py3-setuptools`、`make`、`g++` 和 `git`。helper 随后恢复原始 `/etc/apk/repositories`，再作为 `node:22-alpine` named build context 供三个 Go 产品的 build stage 使用。最终 Runner、Proxy 和 SSH Gateway runtime 仍来自各自产品 Dockerfile 声明并经 Docker Official Images mirror 解析的原始基础镜像；helper 不会被 export。镜像站属于构建信任边界，只有在操作者确认其同步和治理策略后才应启用。
@@ -120,7 +120,7 @@ org.opencontainers.image.version=v0.190.0-cos-38ecad62
 ```bash
 ./scripts/cos-production-images.sh verify \
   --repository-prefix daytona-local \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 `inspect` 是 `verify` 的别名。identity gate 会逐镜像检查：
@@ -141,7 +141,7 @@ export 会先重新执行完整 identity gate。输出目录必须不存在，�
 ```bash
 ./scripts/cos-production-images.sh export \
   --repository-prefix daytona-local \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 也可以从空输出目录一次完成全部阶段：
@@ -149,16 +149,16 @@ export 会先重新执行完整 identity gate。输出目录必须不存在，�
 ```bash
 ./scripts/cos-production-images.sh all \
   --repository-prefix daytona-local \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 输出包括：
 
 ```text
-api_v0.190.0-cos-38ecad62_linux-amd64.tar
-runner_v0.190.0-cos-38ecad62_linux-amd64.tar
-proxy_v0.190.0-cos-38ecad62_linux-amd64.tar
-ssh-gateway_v0.190.0-cos-38ecad62_linux-amd64.tar
+api_v0.190.0-local-first-2862ea87_linux-amd64.tar
+runner_v0.190.0-local-first-2862ea87_linux-amd64.tar
+proxy_v0.190.0-local-first-2862ea87_linux-amd64.tar
+ssh-gateway_v0.190.0-local-first-2862ea87_linux-amd64.tar
 IMAGE-MANIFEST.tsv
 FILE-MANIFEST.sha256
 ```
@@ -170,14 +170,14 @@ FILE-MANIFEST.sha256
 Linux 回验：
 
 ```bash
-cd /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+cd /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 sha256sum -c FILE-MANIFEST.sha256
 ```
 
 macOS 回验：
 
 ```bash
-cd /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+cd /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 shasum -a 256 -c FILE-MANIFEST.sha256
 ```
 
@@ -200,13 +200,13 @@ swr.cn-east-3.myhuaweicloud.com/ruiinsurance
 ```bash
 ./scripts/cos-production-images.sh build \
   --repository-prefix swr.cn-east-3.myhuaweicloud.com/ruiinsurance \
-  --output-dir /private/tmp/daytona-cos-production-images/v0.190.0-cos-38ecad62
+  --output-dir /private/tmp/daytona-product-images/v0.190.0-local-first-2862ea87
 ```
 
 也可以以后从 `daytona-local` 逐个 retag：
 
 ```bash
-VERSION=v0.190.0-cos-38ecad62
+VERSION=v0.190.0-local-first-2862ea87
 SWR=swr.cn-east-3.myhuaweicloud.com/ruiinsurance
 
 docker tag daytona-local/daytona-api:${VERSION} ${SWR}/daytona-api:${VERSION}
@@ -237,9 +237,9 @@ docker push ${SWR}/daytona-ssh-gateway:${VERSION}
 示例：
 
 ```bash
-shasum -a 256 api_v0.190.0-cos-38ecad62_linux-amd64.tar
+shasum -a 256 api_v0.190.0-local-first-2862ea87_linux-amd64.tar
 # 传输并在目标端核验后：
-rm -- api_v0.190.0-cos-38ecad62_linux-amd64.tar
+rm -- api_v0.190.0-local-first-2862ea87_linux-amd64.tar
 ```
 
 不要一次删除整个输出目录；保留 manifest 和 checksum，直到全部四个镜像在目标端完成核验。
