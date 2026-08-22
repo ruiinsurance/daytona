@@ -139,7 +139,6 @@ func TestResolveVolumeMountPathsRejectsEscapingSubpaths(t *testing.T) {
 func TestLocalVolumeBindsUseCanonicalSameSourceWithoutMountS3(t *testing.T) {
 	root := t.TempDir()
 	client := newStartTestDockerClient(nil)
-	client.localVolumeEnabled = true
 	client.localVolumeRoot = root
 	sandboxID := "11111111-1111-4111-8111-111111111111"
 	subpath := "sandboxes/" + sandboxID + "/workspace"
@@ -189,17 +188,20 @@ func TestValidateLocalWorkspaceSubpathRejectsNonCanonicalPaths(t *testing.T) {
 	}
 }
 
-func TestLocalVolumeBackendIsDisabledByDefault(t *testing.T) {
+func TestLocalVolumeBackendRequiresNoEnableSwitch(t *testing.T) {
 	root := t.TempDir()
 	client := newStartTestDockerClient(nil)
 	client.localVolumeRoot = root
 	subpath := "sandboxes/11111111-1111-4111-8111-111111111111/workspace"
-	_, err := client.getVolumesMountPathBinds(context.Background(), []dto.VolumeDTO{
+	binds, err := client.getVolumesMountPathBinds(context.Background(), []dto.VolumeDTO{
 		{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath, Backend: localVolumeBackend},
 		{VolumeId: testVolumeID, MountPath: "/config", Subpath: &subpath, Backend: localVolumeBackend},
 	})
-	if err == nil || !strings.Contains(err.Error(), "local volume backend is disabled") {
-		t.Fatalf("getVolumesMountPathBinds() error = %v, want disabled error", err)
+	if err != nil {
+		t.Fatalf("getVolumesMountPathBinds() error = %v", err)
+	}
+	if len(binds) != 2 {
+		t.Fatalf("getVolumesMountPathBinds() = %#v, want workspace and config binds", binds)
 	}
 }
 
@@ -214,7 +216,6 @@ func TestLocalVolumeBindsRejectSymlinkEscape(t *testing.T) {
 		t.Fatalf("create escaping symlink: %v", err)
 	}
 	client := newStartTestDockerClient(nil)
-	client.localVolumeEnabled = true
 	client.localVolumeRoot = root
 	subpath := "sandboxes/11111111-1111-4111-8111-111111111111/workspace"
 	_, err := client.getVolumesMountPathBinds(context.Background(), []dto.VolumeDTO{
@@ -243,10 +244,21 @@ func TestValidateLocalVolumeRootRejectsSymlinkBeforeCreatingChildren(t *testing.
 	}
 }
 
+func TestValidateLocalVolumeRootRejectsMissingRoot(t *testing.T) {
+	missingRoot := filepath.Join(t.TempDir(), "missing-root")
+
+	_, err := validateLocalVolumeRoot(missingRoot)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("validateLocalVolumeRoot() error = %v, want missing-root rejection", err)
+	}
+	if _, statErr := os.Stat(missingRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("root validation created an unmounted directory: %v", statErr)
+	}
+}
+
 func TestLocalVolumeBindsRejectMismatchedWorkspaceAndConfig(t *testing.T) {
 	root := t.TempDir()
 	client := newStartTestDockerClient(nil)
-	client.localVolumeEnabled = true
 	client.localVolumeRoot = root
 	workspace := "sandboxes/11111111-1111-4111-8111-111111111111/workspace"
 	config := "sandboxes/22222222-2222-4222-8222-222222222222/workspace"
@@ -262,7 +274,6 @@ func TestLocalVolumeBindsRejectMismatchedWorkspaceAndConfig(t *testing.T) {
 func TestLocalVolumeBindsRejectMixedCOSVolumes(t *testing.T) {
 	root := t.TempDir()
 	client := newStartTestDockerClient(nil)
-	client.localVolumeEnabled = true
 	client.localVolumeRoot = root
 	subpath := "sandboxes/11111111-1111-4111-8111-111111111111/workspace"
 	_, err := client.getVolumesMountPathBinds(context.Background(), []dto.VolumeDTO{
@@ -272,5 +283,23 @@ func TestLocalVolumeBindsRejectMixedCOSVolumes(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot be mixed with COS volumes") {
 		t.Fatalf("getVolumesMountPathBinds() error = %v, want mixed-backend rejection", err)
+	}
+}
+
+func TestRunnerRejectsNonLocalVolumesBeforeMountS3(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "mount-s3-ran")
+	binDir := t.TempDir()
+	writeFakeCommand(t, binDir, "mount-s3", "touch "+marker+"; exit 97")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := newStartTestDockerClient(nil)
+	_, err := client.getVolumesMountPathBinds(context.Background(), []dto.VolumeDTO{
+		{VolumeId: testVolumeID, MountPath: "/workspace", Backend: "cos"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runner only supports local volumes") {
+		t.Fatalf("getVolumesMountPathBinds() error = %v, want local-only rejection", err)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("mount-s3 was executed before local-only rejection: %v", statErr)
 	}
 }

@@ -19,42 +19,36 @@ import (
 )
 
 type HealthcheckServiceConfig struct {
-	Interval           time.Duration
-	Timeout            time.Duration
-	Collector          *metrics.Collector
-	Logger             *slog.Logger
-	Domain             string
-	ApiPort            int
-	ProxyPort          int
-	TlsEnabled         bool
-	Docker             *docker.DockerClient
-	LocalVolumeEnabled bool
+	Interval   time.Duration
+	Timeout    time.Duration
+	Collector  *metrics.Collector
+	Logger     *slog.Logger
+	Domain     string
+	ApiPort    int
+	ProxyPort  int
+	TlsEnabled bool
+	Docker     *docker.DockerClient
 }
 
 // Service handles healthcheck reporting to the API
 type Service struct {
-	log                *slog.Logger
-	interval           time.Duration
-	timeout            time.Duration
-	collector          *metrics.Collector
-	client             *apiclient.APIClient
-	domain             string
-	apiPort            int
-	proxyPort          int
-	tlsEnabled         bool
-	docker             *docker.DockerClient
-	localVolumeEnabled bool
+	log        *slog.Logger
+	interval   time.Duration
+	timeout    time.Duration
+	collector  *metrics.Collector
+	client     *apiclient.APIClient
+	domain     string
+	apiPort    int
+	proxyPort  int
+	tlsEnabled bool
+	docker     *docker.DockerClient
 }
 
-func buildServiceHealth(dockerHealth apiclient.RunnerServiceHealth, localVolumeEnabled bool) []apiclient.RunnerServiceHealth {
-	serviceHealth := []apiclient.RunnerServiceHealth{dockerHealth}
-	if localVolumeEnabled {
-		serviceHealth = append(serviceHealth, apiclient.RunnerServiceHealth{
-			ServiceName: "local-volume",
-			Healthy:     true,
-		})
-	}
-	return serviceHealth
+func buildServiceHealth(dockerHealth apiclient.RunnerServiceHealth) []apiclient.RunnerServiceHealth {
+	return []apiclient.RunnerServiceHealth{dockerHealth, {
+		ServiceName: "local-volume",
+		Healthy:     true,
+	}}
 }
 
 // NewService creates a new healthcheck service
@@ -74,17 +68,16 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 	}
 
 	return &Service{
-		log:                logger.With(slog.String("component", "healthcheck")),
-		client:             apiClient,
-		interval:           cfg.Interval,
-		timeout:            cfg.Timeout,
-		collector:          cfg.Collector,
-		domain:             cfg.Domain,
-		apiPort:            cfg.ApiPort,
-		proxyPort:          cfg.ProxyPort,
-		tlsEnabled:         cfg.TlsEnabled,
-		docker:             cfg.Docker,
-		localVolumeEnabled: cfg.LocalVolumeEnabled,
+		log:        logger.With(slog.String("component", "healthcheck")),
+		client:     apiClient,
+		interval:   cfg.Interval,
+		timeout:    cfg.Timeout,
+		collector:  cfg.Collector,
+		domain:     cfg.Domain,
+		apiPort:    cfg.ApiPort,
+		proxyPort:  cfg.ProxyPort,
+		tlsEnabled: cfg.TlsEnabled,
+		docker:     cfg.Docker,
 	}, nil
 }
 
@@ -147,7 +140,7 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 		dockerHealth.ErrorReason = &errStr
 	}
 
-	healthcheck.SetServiceHealth(buildServiceHealth(dockerHealth, s.localVolumeEnabled))
+	healthcheck.SetServiceHealth(buildServiceHealth(dockerHealth))
 
 	// Collect metrics
 	m, err := s.collector.Collect(reqCtx)

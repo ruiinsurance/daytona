@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from copy import deepcopy
 from importlib.metadata import version
 from typing import Callable, cast, overload
+from uuid import uuid4
 
 import httpx
 from opentelemetry import trace
@@ -418,6 +419,7 @@ class Daytona:
 
         # Create sandbox using dictionary
         sandbox_data = CreateSandbox(
+            id=params.id or uuid4(),
             name=params.name,
             user=params.os_user,
             env=params.env_vars if params.env_vars else {},

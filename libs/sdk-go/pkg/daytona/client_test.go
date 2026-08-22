@@ -16,6 +16,7 @@ import (
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -876,6 +877,9 @@ func TestClientCreateSuccessRequestMapping(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, "FROM alpine:3.20", buildInfo["dockerfileContent"])
 			assert.Equal(t, "sandbox-from-image", body["name"])
+			generatedID, err := uuid.Parse(body["id"].(string))
+			require.NoError(t, err)
+			assert.Equal(t, uuid.Version(4), generatedID.Version())
 			writeJSONResponse(t, w, http.StatusOK, testSandboxPayload("sb-1", "sandbox-from-image", apiclient.SANDBOXSTATE_STARTED))
 		}))
 		defer server.Close()
@@ -894,9 +898,11 @@ func TestClientCreateSuccessRequestMapping(t *testing.T) {
 	})
 
 	t.Run("snapshot params send snapshot field", func(t *testing.T) {
+		const sandboxID = "123e4567-e89b-42d3-a456-426614174000"
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var body map[string]any
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			assert.Equal(t, sandboxID, body["id"])
 			assert.Equal(t, "snap-123", body["snapshot"])
 			assert.Nil(t, body["buildInfo"])
 			writeJSONResponse(t, w, http.StatusOK, testSandboxPayload("sb-2", "sandbox-from-snapshot", apiclient.SANDBOXSTATE_STARTED))
@@ -906,7 +912,7 @@ func TestClientCreateSuccessRequestMapping(t *testing.T) {
 		client := createTestClientWithServer(t, server)
 		sandbox, err := client.Create(context.Background(), types.SnapshotParams{
 			Snapshot:          "snap-123",
-			SandboxBaseParams: types.SandboxBaseParams{Name: "sandbox-from-snapshot"},
+			SandboxBaseParams: types.SandboxBaseParams{ID: sandboxID, Name: "sandbox-from-snapshot"},
 		}, options.WithWaitForStart(false))
 		require.NoError(t, err)
 		assert.Equal(t, "sb-2", sandbox.ID)

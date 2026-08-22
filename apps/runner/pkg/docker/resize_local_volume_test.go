@@ -95,7 +95,6 @@ func TestContainerDiskResizeRollsBackLocalMountMismatch(t *testing.T) {
 
 	dockerClient := newStartTestDockerClient(apiClient)
 	dockerClient.filesystem = "xfs"
-	dockerClient.localVolumeEnabled = true
 	dockerClient.localVolumeRoot = root
 
 	err = dockerClient.ContainerDiskResize(

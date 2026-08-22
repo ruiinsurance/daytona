@@ -13,6 +13,7 @@ package apiclient
 
 import (
 	"encoding/json"
+	"fmt"
 )
 
 // checks if the CreateSandbox type satisfies the MappedNullable interface at compile time
@@ -21,7 +22,7 @@ var _ MappedNullable = &CreateSandbox{}
 // CreateSandbox struct for CreateSandbox
 type CreateSandbox struct {
 	// Stable sandbox identity supplied by a trusted control plane
-	Id *string `json:"id,omitempty"`
+	Id string `json:"id"`
 	// The name of the sandbox. If not provided, the sandbox ID will be used as the name
 	Name *string `json:"name,omitempty"`
 	// The ID or name of the snapshot used for the sandbox
@@ -42,8 +43,6 @@ type CreateSandbox struct {
 	DomainAllowList *string `json:"domainAllowList,omitempty"`
 	// The target (region) where the sandbox will be created
 	Target *string `json:"target,omitempty"`
-	// Storage backend for this sandbox. Local storage must be enabled by the operator.
-	StorageBackend *SandboxStorageBackend `json:"storageBackend,omitempty"`
 	// CPU cores allocated to the sandbox
 	Cpu *int32 `json:"cpu,omitempty"`
 	// GPU units allocated to the sandbox
@@ -75,10 +74,9 @@ type _CreateSandbox CreateSandbox
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewCreateSandbox() *CreateSandbox {
+func NewCreateSandbox(id string) *CreateSandbox {
 	this := CreateSandbox{}
-	var storageBackend SandboxStorageBackend = SANDBOXSTORAGEBACKEND_COS
-	this.StorageBackend = &storageBackend
+	this.Id = id
 	return &this
 }
 
@@ -87,41 +85,31 @@ func NewCreateSandbox() *CreateSandbox {
 // but it doesn't guarantee that properties required by API are set
 func NewCreateSandboxWithDefaults() *CreateSandbox {
 	this := CreateSandbox{}
-	var storageBackend SandboxStorageBackend = SANDBOXSTORAGEBACKEND_COS
-	this.StorageBackend = &storageBackend
 	return &this
 }
 
-// GetId returns the Id field value if set, zero value otherwise.
+// GetId returns the Id field value
 func (o *CreateSandbox) GetId() string {
-	if o == nil || IsNil(o.Id) {
+	if o == nil {
 		var ret string
 		return ret
 	}
-	return *o.Id
+
+	return o.Id
 }
 
-// GetIdOk returns a tuple with the Id field value if set, nil otherwise
+// GetIdOk returns a tuple with the Id field value
 // and a boolean to check if the value has been set.
 func (o *CreateSandbox) GetIdOk() (*string, bool) {
-	if o == nil || IsNil(o.Id) {
+	if o == nil {
 		return nil, false
 	}
-	return o.Id, true
+	return &o.Id, true
 }
 
-// HasId returns a boolean if a field has been set.
-func (o *CreateSandbox) HasId() bool {
-	if o != nil && !IsNil(o.Id) {
-		return true
-	}
-
-	return false
-}
-
-// SetId gets a reference to the given string and assigns it to the Id field.
+// SetId sets field value
 func (o *CreateSandbox) SetId(v string) {
-	o.Id = &v
+	o.Id = v
 }
 
 // GetName returns the Name field value if set, zero value otherwise.
@@ -442,38 +430,6 @@ func (o *CreateSandbox) HasTarget() bool {
 // SetTarget gets a reference to the given string and assigns it to the Target field.
 func (o *CreateSandbox) SetTarget(v string) {
 	o.Target = &v
-}
-
-// GetStorageBackend returns the StorageBackend field value if set, zero value otherwise.
-func (o *CreateSandbox) GetStorageBackend() SandboxStorageBackend {
-	if o == nil || IsNil(o.StorageBackend) {
-		var ret SandboxStorageBackend
-		return ret
-	}
-	return *o.StorageBackend
-}
-
-// GetStorageBackendOk returns a tuple with the StorageBackend field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *CreateSandbox) GetStorageBackendOk() (*SandboxStorageBackend, bool) {
-	if o == nil || IsNil(o.StorageBackend) {
-		return nil, false
-	}
-	return o.StorageBackend, true
-}
-
-// HasStorageBackend returns a boolean if a field has been set.
-func (o *CreateSandbox) HasStorageBackend() bool {
-	if o != nil && !IsNil(o.StorageBackend) {
-		return true
-	}
-
-	return false
-}
-
-// SetStorageBackend gets a reference to the given SandboxStorageBackend and assigns it to the StorageBackend field.
-func (o *CreateSandbox) SetStorageBackend(v SandboxStorageBackend) {
-	o.StorageBackend = &v
 }
 
 // GetCpu returns the Cpu field value if set, zero value otherwise.
@@ -838,9 +794,7 @@ func (o CreateSandbox) MarshalJSON() ([]byte, error) {
 
 func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if !IsNil(o.Id) {
-		toSerialize["id"] = o.Id
-	}
+	toSerialize["id"] = o.Id
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
@@ -870,9 +824,6 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Target) {
 		toSerialize["target"] = o.Target
-	}
-	if !IsNil(o.StorageBackend) {
-		toSerialize["storageBackend"] = o.StorageBackend
 	}
 	if !IsNil(o.Cpu) {
 		toSerialize["cpu"] = o.Cpu
@@ -916,6 +867,27 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 }
 
 func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
+	// This validates that all required properties are included in the JSON object
+	// by unmarshalling the object into a generic map with string keys and checking
+	// that every required field exists as a key in the generic map.
+	requiredProperties := []string{
+		"id",
+	}
+
+	allProperties := make(map[string]interface{})
+
+	err = json.Unmarshal(data, &allProperties)
+
+	if err != nil {
+		return err
+	}
+
+	for _, requiredProperty := range requiredProperties {
+		if _, exists := allProperties[requiredProperty]; !exists {
+			return fmt.Errorf("no value given for required property %v", requiredProperty)
+		}
+	}
+
 	varCreateSandbox := _CreateSandbox{}
 
 	err = json.Unmarshal(data, &varCreateSandbox)
@@ -940,7 +912,6 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "networkAllowList")
 		delete(additionalProperties, "domainAllowList")
 		delete(additionalProperties, "target")
-		delete(additionalProperties, "storageBackend")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "gpu")
 		delete(additionalProperties, "gpuType")

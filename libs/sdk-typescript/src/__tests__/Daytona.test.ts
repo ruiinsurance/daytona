@@ -315,12 +315,29 @@ describe('Daytona', () => {
 
     expect(mockSandboxApi.createSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
+        id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
         labels: { 'code-toolbox-language': 'python' },
         target: 'us',
       }),
       undefined,
       { timeout: 60000 },
     )
+  })
+
+  it('forwards a caller-supplied stable sandbox id', async () => {
+    const { Daytona } = await import('../Daytona')
+    const instance = new Daytona({ apiKey: 'k', apiUrl: 'http://api', target: 'us' })
+    const id = '11111111-1111-4111-8111-111111111111'
+
+    mockSandboxApi.createSandbox.mockResolvedValue(
+      createApiResponse({ id, state: 'started', labels: { 'code-toolbox-language': 'python' } }),
+    )
+
+    await instance.create({ id, language: 'python' })
+
+    expect(mockSandboxApi.createSandbox).toHaveBeenCalledWith(expect.objectContaining({ id }), undefined, {
+      timeout: 60000,
+    })
   })
 
   it('creates sandboxes from image names using buildInfo dockerfile content', async () => {

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Spliterator;
 import java.util.Spliterators;
+import java.util.UUID;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import okhttp3.OkHttpClient;
@@ -493,7 +494,9 @@ public class Daytona implements AutoCloseable {
     }
 
     private CreateSandbox baseSandboxBody(io.daytona.sdk.model.CreateSandboxParams params) {
-        CreateSandbox body = new CreateSandbox();
+        CreateSandbox body = new CreateSandbox().id(params != null && params.getId() != null
+                ? params.getId()
+                : UUID.randomUUID());
         if (params == null) {
             if (config.getTarget() != null && !config.getTarget().isEmpty()) {
                 body.setTarget(config.getTarget());

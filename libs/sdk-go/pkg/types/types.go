@@ -78,6 +78,8 @@ type VolumeMount struct {
 
 // SandboxBaseParams contains common parameters for sandbox creation.
 type SandboxBaseParams struct {
+	// ID is the stable sandbox identity. A UUIDv4 is generated when omitted.
+	ID                  string
 	Name                string
 	User                string
 	Language            CodeLanguage

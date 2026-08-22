@@ -81,9 +81,9 @@ export class Sandbox {
 
   @Column({
     type: 'character varying',
-    default: SandboxStorageBackend.COS,
+    default: SandboxStorageBackend.LOCAL,
   })
-  storageBackend: SandboxStorageBackend = SandboxStorageBackend.COS
+  storageBackend: SandboxStorageBackend = SandboxStorageBackend.LOCAL
 
   //  this is the runnerId of the runner that was previously assigned to the sandbox
   //  if something goes wrong with new runner assignment, we can revert to the previous runner

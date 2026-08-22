@@ -12,6 +12,7 @@ import { SandboxDto } from '../dto/sandbox.dto'
 import { Runner } from '../entities/runner.entity'
 import { Sandbox } from '../entities/sandbox.entity'
 import { Snapshot } from '../entities/snapshot.entity'
+import { WarmPool } from '../entities/warm-pool.entity'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
@@ -79,7 +80,7 @@ function createHarness() {
     getVolumesByIdOrName: jest.fn().mockResolvedValue(new Map([[volumeId, { id: volumeId }]])),
   }
   const configService = {
-    get: jest.fn((key: string) => (key === 'localVolume.enabled' ? true : undefined)),
+    get: jest.fn(),
     getOrThrow: jest.fn(),
   }
   const organizationService = {
@@ -139,13 +140,25 @@ function createHarness() {
 }
 
 describe('SandboxService local owner placement', () => {
+  it('rejects warm pool creation before runner selection or persistence', async () => {
+    const harness = createHarness()
+    const warmPool = new WarmPool()
+    warmPool.id = 'warm-pool-1'
+
+    await expect(harness.service.createForWarmPool(warmPool)).rejects.toThrow(
+      'Warm pool sandbox creation is not supported with Runner-local storage',
+    )
+
+    expect(harness.runnerService.getRandomAvailableRunner).not.toHaveBeenCalled()
+    expect(harness.sandboxRepository.insert).not.toHaveBeenCalled()
+  })
+
   it('persists one owner before pulling a missing snapshot', async () => {
     const harness = createHarness()
     const createDto = {
       id: sandboxId,
       name: 'local-placement-test',
       snapshot: harness.snapshot.name,
-      storageBackend: SandboxStorageBackend.LOCAL,
       volumes: [
         {
           volumeId,
@@ -213,6 +226,37 @@ describe('SandboxService local owner placement', () => {
       statusCode: 503,
       code: 'owner_runner_unavailable',
       ownerRunnerId: ownerId,
+    })
+    expect(sandbox.runnerId).toBe(ownerId)
+    expect(harness.sandboxRepository.update).not.toHaveBeenCalled()
+    expect(harness.organizationUsageService.incrementPendingSandboxUsage).not.toHaveBeenCalled()
+  })
+
+  it('fails closed for a legacy COS sandbox before mutating start state', async () => {
+    const harness = createHarness()
+    const sandbox = {
+      id: sandboxId,
+      organizationId,
+      region: harness.region.id,
+      runnerId: ownerId,
+      storageBackend: SandboxStorageBackend.COS,
+      state: SandboxState.STOPPED,
+      desiredState: SandboxDesiredState.STOPPED,
+      pending: false,
+    } as Sandbox
+    jest.spyOn(harness.service, 'findOneByIdOrName').mockResolvedValue(sandbox)
+
+    let caught: unknown
+    try {
+      await harness.service.start(sandbox.id, harness.organization)
+    } catch (error) {
+      caught = error
+    }
+
+    expect((caught as { getResponse?: () => unknown }).getResponse?.()).toMatchObject({
+      statusCode: 409,
+      code: 'sandbox_storage_backend_unsupported',
+      storageBackend: SandboxStorageBackend.COS,
     })
     expect(sandbox.runnerId).toBe(ownerId)
     expect(harness.sandboxRepository.update).not.toHaveBeenCalled()

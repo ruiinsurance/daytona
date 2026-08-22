@@ -140,12 +140,9 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return "", "", err
 	}
 
-	volumeMountPathBinds := make([]string, 0)
-	if sandboxDto.Volumes != nil {
-		volumeMountPathBinds, err = d.getVolumesMountPathBinds(ctx, sandboxDto.Volumes)
-		if err != nil {
-			return "", "", err
-		}
+	volumeMountPathBinds, err := d.getVolumesMountPathBinds(ctx, sandboxDto.Volumes)
+	if err != nil {
+		return "", "", err
 	}
 
 	// Pin GPU sandboxes to a single physical card. The allocator mutex must

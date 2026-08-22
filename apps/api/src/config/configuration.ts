@@ -192,9 +192,6 @@ const configuration = {
     apiVersion: (process.env.DEFAULT_RUNNER_API_VERSION || '2') as '0' | '2',
     name: process.env.DEFAULT_RUNNER_NAME,
   },
-  localVolume: {
-    enabled: process.env.LOCAL_VOLUME_BACKEND_ENABLED === 'true',
-  },
   buildInfo: {
     maxCpuPerRunner: parseInt(process.env.BUILD_INFO_MAX_CPU_PER_RUNNER || '40', 10),
   },

@@ -16,6 +16,7 @@ import (
 	"github.com/daytonaio/daytona/cli/util"
 	views_common "github.com/daytonaio/daytona/cli/views/common"
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -34,7 +35,7 @@ var CreateCmd = &cobra.Command{
 			return err
 		}
 
-		createSandbox := apiclient.NewCreateSandbox()
+		createSandbox := apiclient.NewCreateSandbox(uuid.NewString())
 
 		// Add non-zero values to the request
 		if snapshotFlag != "" {

@@ -120,7 +120,20 @@ RSpec.describe Daytona::Daytona do
 
       expect(result).to eq(sandbox)
       expect(sandbox_api).to have_received(:create_sandbox) do |request|
+        expect(request.id).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/)
         expect(request.labels[Daytona::CODE_TOOLBOX_LANGUAGE_LABEL]).to eq('python')
+      end
+    end
+
+    it 'forwards an explicit sandbox id' do
+      sandbox_id = '123e4567-e89b-42d3-a456-426614174000'
+      params = Daytona::CreateSandboxFromSnapshotParams.new(id: sandbox_id)
+      allow(sandbox_api).to receive(:create_sandbox).and_return(sandbox_dto)
+
+      described_class.new(config).create(params)
+
+      expect(sandbox_api).to have_received(:create_sandbox) do |request|
+        expect(request.id).to eq(sandbox_id)
       end
     end
 

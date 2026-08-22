@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 /**
@@ -16,6 +17,7 @@ import java.util.Map;
  * intervals, and volume mounts.
  */
 public class CreateSandboxParams {
+    private UUID id;
     private String name;
     private String user;
     private String language;
@@ -29,6 +31,20 @@ public class CreateSandboxParams {
     private Boolean networkBlockAll;
     private String domainAllowList;
     private String linkedSandbox;
+
+    /**
+     * Returns the stable Sandbox identity.
+     *
+     * @return Sandbox UUID, or {@code null} to generate a UUIDv4
+     */
+    public UUID getId() { return id; }
+
+    /**
+     * Sets the stable Sandbox identity.
+     *
+     * @param id Sandbox UUID
+     */
+    public void setId(UUID id) { this.id = id; }
 
     /**
      * Returns Sandbox name.

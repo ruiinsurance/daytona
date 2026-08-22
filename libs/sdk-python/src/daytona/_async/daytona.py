@@ -11,6 +11,7 @@ from copy import deepcopy
 from importlib.metadata import version
 from types import TracebackType
 from typing import Callable, cast, overload
+from uuid import uuid4
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -533,6 +534,7 @@ class AsyncDaytona:
 
         # Create sandbox using dictionary
         sandbox_data = CreateSandbox(
+            id=params.id or uuid4(),
             name=params.name,
             user=params.os_user,
             env=params.env_vars if params.env_vars else {},
