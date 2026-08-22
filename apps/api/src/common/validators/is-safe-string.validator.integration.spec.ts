@@ -26,6 +26,7 @@ import { RegistryType } from '../../docker-registry/enums/registry-type.enum'
 
 const URL_INPUT = 'https://evil.com'
 const HTML_INPUT = '<script>alert(1)</script>'
+const SANDBOX_ID = '11111111-1111-4111-8111-111111111111'
 
 function hasIsSafeDisplayStringError(errors: any[]): boolean {
   return errors.some((e) => e.constraints && 'IsSafeDisplayStringConstraint' in e.constraints)
@@ -110,13 +111,13 @@ describe('DTO @IsSafeDisplayString() integration tests — display name fields o
 
   describe('CreateSandboxDto', () => {
     it('should accept valid name', async () => {
-      const dto = plainToInstance(CreateSandboxDto, { name: 'my-sandbox' })
+      const dto = plainToInstance(CreateSandboxDto, { id: SANDBOX_ID, name: 'my-sandbox' })
       const errors = await validate(dto)
       expect(errors).toHaveLength(0)
     })
 
     it('should reject URL in name', async () => {
-      const dto = plainToInstance(CreateSandboxDto, { name: URL_INPUT })
+      const dto = plainToInstance(CreateSandboxDto, { id: SANDBOX_ID, name: URL_INPUT })
       const errors = await validate(dto)
       expect(hasIsSafeDisplayStringError(errors)).toBe(true)
     })
@@ -386,7 +387,7 @@ describe('DTO @IsSafeDisplayString() integration tests — display name fields o
     })
 
     it('should reject sandbox name with www prefix', async () => {
-      const dto = plainToInstance(CreateSandboxDto, { name: 'www.evil.com' })
+      const dto = plainToInstance(CreateSandboxDto, { id: SANDBOX_ID, name: 'www.evil.com' })
       const errors = await validate(dto)
       expect(hasIsSafeDisplayStringError(errors)).toBe(true)
     })

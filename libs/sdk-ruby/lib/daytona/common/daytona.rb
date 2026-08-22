@@ -7,6 +7,9 @@ module Daytona
   CODE_TOOLBOX_LANGUAGE_LABEL = 'code-toolbox-language'
 
   class CreateSandboxBaseParams
+    # @return [String, nil] Stable sandbox identity. A UUIDv4 is generated when omitted.
+    attr_accessor :id
+
     # @return [Symbol, nil] Programming language for the Sandbox
     attr_accessor :language
 
@@ -57,6 +60,7 @@ module Daytona
 
     # Initialize CreateSandboxBaseParams
     #
+    # @param id [String, nil] Stable sandbox identity
     # @param language [Symbol, nil] Programming language for the Sandbox
     # @param os_user [String, nil] OS user for the Sandbox
     # @param env_vars [Hash<String, String>, nil] Environment variables to set in the Sandbox
@@ -73,6 +77,7 @@ module Daytona
     # @param ephemeral [Boolean, nil] Whether the Sandbox should be ephemeral
     # @param linked_sandbox [String, nil] ID or name of an existing Sandbox to link the new Sandbox to
     def initialize( # rubocop:disable Metrics/MethodLength, Metrics/ParameterLists
+      id: nil,
       language: nil,
       os_user: nil,
       env_vars: nil,
@@ -89,6 +94,7 @@ module Daytona
       ephemeral: nil,
       linked_sandbox: nil
     )
+      @id = id
       @language = language
       @os_user = os_user
       @env_vars = env_vars
@@ -114,6 +120,7 @@ module Daytona
     # @return [Hash<Symbol, Object>] Hash representation of the parameters
     def to_h # rubocop:disable Metrics/MethodLength
       {
+        id:,
         language:,
         os_user:,
         env_vars:,

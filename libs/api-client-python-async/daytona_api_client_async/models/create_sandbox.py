@@ -23,7 +23,6 @@ from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from daytona_api_client_async.models.create_build_info import CreateBuildInfo
 from daytona_api_client_async.models.gpu_type import GpuType
-from daytona_api_client_async.models.sandbox_storage_backend import SandboxStorageBackend
 from daytona_api_client_async.models.sandbox_volume import SandboxVolume
 from pydantic import TypeAdapter
 from typing import Optional, Set
@@ -35,7 +34,7 @@ class CreateSandbox(BaseModel):
     """
     CreateSandbox
     """ # noqa: E501
-    id: Optional[UUID] = Field(default=None, description="Stable sandbox identity supplied by a trusted control plane")
+    id: UUID = Field(description="Stable sandbox identity supplied by a trusted control plane")
     name: Optional[StrictStr] = Field(default=None, description="The name of the sandbox. If not provided, the sandbox ID will be used as the name")
     snapshot: Optional[StrictStr] = Field(default=None, description="The ID or name of the snapshot used for the sandbox")
     user: Optional[StrictStr] = Field(default=None, description="The user associated with the project")
@@ -46,7 +45,6 @@ class CreateSandbox(BaseModel):
     network_allow_list: Optional[StrictStr] = Field(default=None, description="Comma-separated list of allowed CIDR network addresses for the sandbox", serialization_alias="networkAllowList")
     domain_allow_list: Optional[StrictStr] = Field(default=None, description="Comma-separated list of allowed domains for the sandbox", serialization_alias="domainAllowList")
     target: Optional[StrictStr] = Field(default=None, description="The target (region) where the sandbox will be created")
-    storage_backend: Optional[SandboxStorageBackend] = Field(default=None, description="Storage backend for this sandbox. Local storage must be enabled by the operator.", serialization_alias="storageBackend")
     cpu: Optional[StrictInt] = Field(default=None, description="CPU cores allocated to the sandbox")
     gpu: Optional[StrictInt] = Field(default=None, description="GPU units allocated to the sandbox")
     gpu_type: Optional[List[GpuType]] = Field(default=None, description="Preferred GPU type for the sandbox. Accepts a single value or an ordered preference list — the scheduler tries each in order and pins the sandbox to the first that has capacity.", serialization_alias="gpuType")
@@ -59,7 +57,7 @@ class CreateSandbox(BaseModel):
     build_info: Optional[CreateBuildInfo] = Field(default=None, description="Build information for the sandbox", serialization_alias="buildInfo")
     linked_sandbox: Optional[StrictStr] = Field(default=None, description="ID or name of an existing sandbox to link the new sandbox to. The new sandbox will be scheduled on the same runner as the linked sandbox so a local network can be established between them. Linked sandboxes must be ephemeral (autoDeleteInterval=0) and cannot themselves be linked to another sandbox.", serialization_alias="linkedSandbox")
     additional_properties: Dict[str, Any] = {}
-    __properties: ClassVar[List[str]] = ["id", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "storageBackend", "cpu", "gpu", "gpuType", "memory", "disk", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "linkedSandbox"]
+    __properties: ClassVar[List[str]] = ["id", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "cpu", "gpu", "gpuType", "memory", "disk", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "linkedSandbox"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -139,7 +137,6 @@ class CreateSandbox(BaseModel):
             "network_allow_list": obj.get("networkAllowList"),
             "domain_allow_list": obj.get("domainAllowList"),
             "target": obj.get("target"),
-            "storage_backend": obj.get("storageBackend"),
             "cpu": obj.get("cpu"),
             "gpu": obj.get("gpu"),
             "gpu_type": obj.get("gpuType"),
@@ -158,5 +155,4 @@ class CreateSandbox(BaseModel):
                 _obj.additional_properties[_key] = obj.get(_key)
 
         return _obj
-
 

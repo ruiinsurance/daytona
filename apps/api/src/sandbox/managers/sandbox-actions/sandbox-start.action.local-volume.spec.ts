@@ -140,6 +140,19 @@ function createAction(params?: {
 }
 
 describe('SandboxStartAction local owner pinning', () => {
+  it('does not run replacement logic for a legacy COS sandbox', async () => {
+    const sandbox = localSandbox(SandboxState.ARCHIVED)
+    sandbox.storageBackend = SandboxStorageBackend.COS
+    const harness = createAction()
+
+    await expect(harness.action.run(sandbox, lockCode as never)).resolves.toBe(DONT_SYNC_AGAIN)
+
+    expect(harness.runnerService.findOne).not.toHaveBeenCalled()
+    expect(harness.runnerService.getRandomAvailableRunner).not.toHaveBeenCalled()
+    expect(harness.runnerAdapterFactory.create).not.toHaveBeenCalled()
+    expect(harness.updateSandboxState).not.toHaveBeenCalled()
+  })
+
   it('pulls a missing snapshot only on the persisted owner', async () => {
     const sandbox = localSandbox(SandboxState.PULLING_SNAPSHOT)
     const harness = createAction()

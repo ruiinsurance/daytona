@@ -27,7 +27,6 @@ type RunnerInstanceConfig struct {
 	SandboxService     *services.SandboxService
 	NetRulesManager    *netrules.NetRulesManager
 	SSHGatewayService  *sshgateway.Service
-	LocalVolumeEnabled bool
 }
 
 type Runner struct {
@@ -39,7 +38,6 @@ type Runner struct {
 	SandboxService     *services.SandboxService
 	NetRulesManager    *netrules.NetRulesManager
 	SSHGatewayService  *sshgateway.Service
-	LocalVolumeEnabled bool
 }
 
 var runner *Runner
@@ -68,7 +66,6 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			MetricsCollector:   config.MetricsCollector,
 			NetRulesManager:    config.NetRulesManager,
 			SSHGatewayService:  config.SSHGatewayService,
-			LocalVolumeEnabled: config.LocalVolumeEnabled,
 		}
 	}
 
@@ -94,15 +91,12 @@ func (r *Runner) InspectRunnerServices(ctx context.Context) []models.RunnerServi
 	}
 
 	runnerServicesInfo = append(runnerServicesInfo, dockerHealth)
-	runnerServicesInfo = appendLocalVolumeServiceInfo(runnerServicesInfo, r.LocalVolumeEnabled)
+	runnerServicesInfo = appendLocalVolumeServiceInfo(runnerServicesInfo)
 
 	return runnerServicesInfo
 }
 
-func appendLocalVolumeServiceInfo(services []models.RunnerServiceInfo, enabled bool) []models.RunnerServiceInfo {
-	if !enabled {
-		return services
-	}
+func appendLocalVolumeServiceInfo(services []models.RunnerServiceInfo) []models.RunnerServiceInfo {
 	return append(services, models.RunnerServiceInfo{
 		ServiceName: "local-volume",
 		Healthy:     true,

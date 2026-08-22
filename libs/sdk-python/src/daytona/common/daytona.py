@@ -6,6 +6,7 @@ from __future__ import annotations
 import warnings
 from enum import Enum
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import override
@@ -118,6 +119,7 @@ class CreateSandboxBaseParams(BaseModel):
     """Base parameters for creating a new Sandbox.
 
     Attributes:
+        id (UUID | None): Stable sandbox identity. A UUIDv4 is generated when omitted.
         name (str | None): Name of the Sandbox.
         language (CodeLanguage | CodeLanguageLiteral | None): Programming language for the Sandbox.
             Defaults to "python".
@@ -147,6 +149,7 @@ class CreateSandboxBaseParams(BaseModel):
             ephemeral (auto_delete_interval=0) and cannot themselves be linked to another Sandbox.
     """
 
+    id: UUID | None = None
     name: str | None = None
     language: CodeLanguage | CodeLanguageLiteral | None = None
     os_user: str | None = None

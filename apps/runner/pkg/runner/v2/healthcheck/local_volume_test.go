@@ -9,16 +9,11 @@ import (
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 )
 
-func TestBuildServiceHealthReportsLocalVolumeCapabilityOnlyWhenEnabled(t *testing.T) {
+func TestBuildServiceHealthAlwaysReportsLocalVolumeCapability(t *testing.T) {
 	dockerHealth := apiclient.RunnerServiceHealth{ServiceName: "docker", Healthy: true}
 
-	disabled := buildServiceHealth(dockerHealth, false)
-	if len(disabled) != 1 || disabled[0].ServiceName != "docker" {
-		t.Fatalf("disabled service health = %#v, want Docker only", disabled)
-	}
-
-	enabled := buildServiceHealth(dockerHealth, true)
-	if len(enabled) != 2 || enabled[1].ServiceName != "local-volume" || !enabled[1].Healthy {
-		t.Fatalf("enabled service health = %#v, want healthy local-volume capability", enabled)
+	services := buildServiceHealth(dockerHealth)
+	if len(services) != 2 || services[1].ServiceName != "local-volume" || !services[1].Healthy {
+		t.Fatalf("service health = %#v, want healthy local-volume capability", services)
 	}
 }

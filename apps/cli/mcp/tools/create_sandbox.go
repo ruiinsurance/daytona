@@ -11,6 +11,7 @@ import (
 
 	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -119,7 +120,7 @@ func CreateSandbox(ctx context.Context, request mcp.CallToolRequest, args Create
 }
 
 func createSandboxRequest(args CreateSandboxArgs) (*apiclient.CreateSandbox, error) {
-	createSandbox := apiclient.NewCreateSandbox()
+	createSandbox := apiclient.NewCreateSandbox(uuid.NewString())
 
 	if args.Name != nil && *args.Name != "" {
 		createSandbox.SetName(*args.Name)

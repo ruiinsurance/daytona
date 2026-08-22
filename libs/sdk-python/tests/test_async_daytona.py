@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import pytest
 
@@ -463,8 +464,21 @@ class TestAsyncDaytonaCreateValidation:
         daytona._sandbox_api.create_sandbox = AsyncMock(return_value=sandbox_dto)
         sandbox = await daytona.create()
         create_request = daytona._sandbox_api.create_sandbox.call_args.args[0]
+        assert isinstance(create_request.id, UUID)
+        assert create_request.id.version == 4
         assert create_request.labels[CODE_TOOLBOX_LANGUAGE_LABEL] == "python"
         assert sandbox.id == sandbox_dto.id
+
+    @pytest.mark.asyncio
+    async def test_create_forwards_explicit_id(self, env_with_api_key, sandbox_dto):
+        sandbox_id = UUID("123e4567-e89b-42d3-a456-426614174000")
+        daytona = _make_async_daytona()
+        daytona._sandbox_api.create_sandbox = AsyncMock(return_value=sandbox_dto)
+
+        await daytona.create(CreateSandboxFromSnapshotParams(id=sandbox_id))
+
+        create_request = daytona._sandbox_api.create_sandbox.call_args.args[0]
+        assert create_request.id == sandbox_id
 
     @pytest.mark.asyncio
     async def test_create_from_image_sets_resources(self, env_with_api_key, sandbox_dto):

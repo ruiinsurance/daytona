@@ -73,6 +73,7 @@ import (
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/options"
 	"github.com/daytonaio/daytona/libs/sdk-go/pkg/types"
 	toolbox "github.com/daytonaio/daytona/libs/toolbox-api-client-go"
+	"github.com/google/uuid"
 )
 
 const (
@@ -447,7 +448,11 @@ func (c *Client) doCreate(ctx context.Context, params any, opts ...func(*options
 	}
 
 	// Build CreateSandbox request using api-client-go
-	createReq := apiclient.NewCreateSandbox()
+	sandboxID := baseParams.ID
+	if sandboxID == "" {
+		sandboxID = uuid.NewString()
+	}
+	createReq := apiclient.NewCreateSandbox(sandboxID)
 
 	// Set base parameters
 	if baseParams.Name != "" {

@@ -255,7 +255,6 @@ func TestStartRejectsWrongLocalBindBeforeContainerStart(t *testing.T) {
 	t.Cleanup(func() { _ = apiClient.Close() })
 
 	dockerClient := newStartTestDockerClient(apiClient)
-	dockerClient.localVolumeEnabled = true
 	dockerClient.localVolumeRoot = root
 	metadata := map[string]string{
 		"volumes": `[{"volumeId":"` + testVolumeID + `","mountPath":"/workspace","subpath":"` + subpath + `","backend":"local"},{"volumeId":"` + testVolumeID + `","mountPath":"/config","subpath":"` + subpath + `","backend":"local"}]`,

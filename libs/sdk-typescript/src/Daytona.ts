@@ -42,6 +42,7 @@ export const CODE_TOOLBOX_LANGUAGE_LABEL = 'code-toolbox-language'
  * Represents a volume mount for a Sandbox.
  *
  * @interface
+ * @property {string} [id] - Stable sandbox UUID. The SDK generates one when omitted.
  * @property {string} volumeId - ID or name of the Volume to mount
  * @property {string} mountPath - Path on the Sandbox to mount the Volume
  */
@@ -156,6 +157,7 @@ export interface Resources {
  * @property {string} [linkedSandbox] - ID or name of an existing sandbox to link the new sandbox to. The new sandbox will be scheduled on the same runner as the linked sandbox so a local network can be established between them. Linked sandboxes must be ephemeral (autoDeleteInterval=0) and cannot themselves be linked to another sandbox.
  */
 export type CreateSandboxBaseParams = {
+  id?: string
   name?: string
   user?: string
   language?: CodeLanguage | string
@@ -546,6 +548,7 @@ export class Daytona implements AsyncDisposable {
 
       const response = await this.sandboxApi.createSandbox(
         {
+          id: params.id ?? globalThis.crypto.randomUUID(),
           name: params.name,
           snapshot: snapshot,
           buildInfo,

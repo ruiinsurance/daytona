@@ -11490,7 +11490,6 @@ components:
       type: object
     CreateSandbox:
       example:
-        storageBackend: ""
         memory: 1
         buildInfo: ""
         networkAllowList: "192.168.1.0/16,10.0.0.0/24"
@@ -11575,12 +11574,6 @@ components:
           description: The target (region) where the sandbox will be created
           example: us
           type: string
-        storageBackend:
-          allOf:
-          - $ref: "#/components/schemas/SandboxStorageBackend"
-          default: cos
-          description: Storage backend for this sandbox. Local storage must be enabled
-            by the operator.
         cpu:
           description: CPU cores allocated to the sandbox
           example: 2
@@ -11637,6 +11630,8 @@ components:
             another sandbox.
           example: sandbox123
           type: string
+      required:
+      - id
       type: object
     ResizeSandbox:
       example:

@@ -33,6 +33,7 @@ func testSandboxPayload(id, name string, state apiclient.SandboxState) map[strin
 		"public":              false,
 		"networkBlockAll":     false,
 		"target":              "us-east-1",
+		"storageBackend":      apiclient.SANDBOXSTORAGEBACKEND_LOCAL,
 		"cpu":                 1,
 		"gpu":                 0,
 		"memory":              2,

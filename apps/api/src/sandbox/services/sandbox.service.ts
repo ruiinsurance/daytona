@@ -24,8 +24,6 @@ import { ResizeSandboxDto } from '../dto/resize-sandbox.dto'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { isRegistryBasedSandboxClass } from '../utils/sandbox-class.util'
-import { OpenFeature } from '@openfeature/server-sdk'
-import { FeatureFlags } from '../../common/constants/feature-flags'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { resolveGpuTypePreferences } from '../utils/gpu-type-preferences.util'
 import { GetRunnerParams, RunnerService } from './runner.service'
@@ -116,6 +114,7 @@ import { Region } from '../../region/entities/region.entity'
 import { SandboxActivityService } from './sandbox-activity.service'
 import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import {
+  assertLocalStorageBackend,
   assertLocalOwnerAvailable,
   allowsAutomaticOwnerChange,
   buildRunnerVolumes,
@@ -396,73 +395,9 @@ export class SandboxService {
   }
 
   async createForWarmPool(warmPoolItem: WarmPool): Promise<Sandbox> {
-    const sandbox = new Sandbox({ region: warmPoolItem.target })
-
-    sandbox.organizationId = SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION
-
-    sandbox.snapshot = warmPoolItem.snapshot
-    //  TODO: default user should be configurable
-    sandbox.osUser = 'daytona'
-    sandbox.env = warmPoolItem.env || {}
-
-    sandbox.cpu = warmPoolItem.cpu
-    sandbox.gpu = warmPoolItem.gpu
-    sandbox.mem = warmPoolItem.mem
-    sandbox.disk = warmPoolItem.disk
-
-    const snapshot = await this.snapshotRepository.findOne({
-      where: [
-        { organizationId: sandbox.organizationId, name: sandbox.snapshot, state: SnapshotState.ACTIVE },
-        { general: true, name: sandbox.snapshot, state: SnapshotState.ACTIVE },
-      ],
-    })
-    if (!snapshot) {
-      throw new BadRequestError(`Snapshot ${sandbox.snapshot} not found while creating warm pool sandbox`)
-    }
-
-    sandbox.gpuType = snapshot.gpuType ?? null
-
-    let gpuRunnerAssignmentLockKey: string | undefined
-
-    sandbox.sandboxClass = snapshot.sandboxClass
-
-    try {
-      // Same per-region GPU runner assignment serialization as createFromSnapshot.
-      if (sandbox.gpu > 0) {
-        const key = `gpu-runner-assignment:${sandbox.region}`
-        await this.redisLockProvider.waitForLock(key, 60, 30000)
-        gpuRunnerAssignmentLockKey = key
-      }
-
-      const runner = await this.runnerService.getRandomAvailableRunner({
-        regions: [sandbox.region],
-        sandboxClass: sandbox.sandboxClass,
-        snapshotRef: snapshot.ref,
-        gpu: sandbox.gpu,
-        gpuType: sandbox.gpuType ?? null,
-      })
-
-      sandbox.runnerId = runner.id
-      sandbox.pending = true
-
-      await this.sandboxRepository.insert(sandbox)
-
-      if (gpuRunnerAssignmentLockKey) {
-        const key = gpuRunnerAssignmentLockKey
-        gpuRunnerAssignmentLockKey = undefined
-        await this.redisLockProvider
-          .unlock(key)
-          .catch((err) => this.logger.error('Failed to release GPU runner assignment lock', err))
-      }
-
-      return sandbox
-    } finally {
-      if (gpuRunnerAssignmentLockKey) {
-        await this.redisLockProvider
-          .unlock(gpuRunnerAssignmentLockKey)
-          .catch((err) => this.logger.error('Failed to release GPU runner assignment lock', err))
-      }
-    }
+    throw new BadRequestError(
+      `Warm pool sandbox creation is not supported with Runner-local storage (pool ${warmPoolItem.id})`,
+    )
   }
 
   async createFromSnapshot(createSandboxDto: CreateSandboxDto, organization: Organization): Promise<SandboxDto> {
@@ -474,7 +409,7 @@ export class SandboxService {
     let sandboxClass: SandboxClass | undefined
 
     const region = await this.getValidatedOrDefaultRegion(organization, createSandboxDto.target)
-    const storageBackend = this.getCreateStorageBackend(createSandboxDto)
+    const storageBackend = SandboxStorageBackend.LOCAL
 
     try {
       let snapshotIdOrName = createSandboxDto.snapshot
@@ -891,7 +826,7 @@ export class SandboxService {
     let gpuRunnerAssignmentLockKey: string | undefined
 
     const region = await this.getValidatedOrDefaultRegion(organization, createSandboxDto.target)
-    const storageBackend = this.getCreateStorageBackend(createSandboxDto)
+    const storageBackend = SandboxStorageBackend.LOCAL
 
     try {
       const cpu = createSandboxDto.cpu || DEFAULT_CPU
@@ -2102,6 +2037,7 @@ export class SandboxService {
     let pendingGpuIncrement: number | undefined
 
     const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organization.id)
+    assertLocalStorageBackend(sandbox)
 
     const region = await this.regionService.findOne(sandbox.region)
     if (!region) {
@@ -2307,6 +2243,7 @@ export class SandboxService {
 
   async recover(sandboxIdOrName: string, organization: Organization, skipStart = false): Promise<Sandbox> {
     const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organization.id)
+    assertLocalStorageBackend(sandbox)
 
     if (!sandbox.recoverable) {
       throw new BadRequestError('Sandbox is not in a recoverable state')
@@ -2528,6 +2465,7 @@ export class SandboxService {
     let pendingGpuIncrement: number | undefined
 
     const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organization.id)
+    assertLocalStorageBackend(sandbox)
 
     const region = await this.regionService.findOne(sandbox.region)
     if (!region) {
@@ -3436,19 +3374,6 @@ export class SandboxService {
     }
 
     return resolved
-  }
-
-  private getCreateStorageBackend(createSandboxDto: CreateSandboxDto): SandboxStorageBackend {
-    const storageBackend = createSandboxDto.storageBackend ?? SandboxStorageBackend.COS
-    if (storageBackend === SandboxStorageBackend.LOCAL) {
-      if (this.configService.get('localVolume.enabled') !== true) {
-        throw new BadRequestError('Local volume backend is disabled')
-      }
-      if (!createSandboxDto.id) {
-        throw new BadRequestError('Local volume sandbox requires a stable sandbox ID')
-      }
-    }
-    return storageBackend
   }
 
   private async getInitialRunnerPlacement(

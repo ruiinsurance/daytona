@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 import pytest
 
@@ -126,8 +127,21 @@ class TestDaytonaCreateValidation:
         request = daytona._sandbox_api.create_sandbox.call_args.kwargs["_request_timeout"]
         assert request == 60
         create_request = daytona._sandbox_api.create_sandbox.call_args.args[0]
+        assert isinstance(create_request.id, UUID)
+        assert create_request.id.version == 4
         assert create_request.labels[CODE_TOOLBOX_LANGUAGE_LABEL] == "python"
         assert sandbox.id == sandbox_dto.id
+
+    def test_create_forwards_explicit_id(self, env_with_api_key, sandbox_dto):
+        sandbox_id = UUID("123e4567-e89b-42d3-a456-426614174000")
+        daytona = _make_daytona()
+        daytona._sandbox_api = MagicMock()
+        daytona._sandbox_api.create_sandbox.return_value = sandbox_dto
+
+        daytona.create(CreateSandboxFromSnapshotParams(id=sandbox_id))
+
+        create_request = daytona._sandbox_api.create_sandbox.call_args.args[0]
+        assert create_request.id == sandbox_id
 
     def test_create_from_image_sets_resources(self, env_with_api_key, sandbox_dto):
         daytona = _make_daytona()

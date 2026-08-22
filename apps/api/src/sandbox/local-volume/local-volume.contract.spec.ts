@@ -4,6 +4,7 @@
  */
 
 import 'reflect-metadata'
+import { Sandbox } from '../entities/sandbox.entity'
 import { RunnerState } from '../enums/runner-state.enum'
 import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import { OwnerRunnerUnavailableError } from '../errors/owner-runner-unavailable.error'
@@ -43,6 +44,10 @@ function readyOwner(): LocalOwnerRunner {
 }
 
 describe('local volume contract', () => {
+  it('defaults new sandbox entities to local storage', () => {
+    expect(new Sandbox({ id: sandboxId, region: 'local' }).storageBackend).toBe(SandboxStorageBackend.LOCAL)
+  })
+
   it('builds explicit same-source workspace and config mounts', () => {
     expect(buildRunnerVolumes(localSandbox())).toEqual([
       {

@@ -106,7 +106,7 @@ func validateLocalVolumePair(volumes []dto.VolumeDTO) error {
 		}
 	}
 	if len(localVolumes) == 0 {
-		return nil
+		return fmt.Errorf("runner only supports local volumes")
 	}
 	if len(localVolumes) != len(volumes) {
 		return fmt.Errorf("local volume backend cannot be mixed with COS volumes")
@@ -152,10 +152,7 @@ func validateLocalVolumeRoot(configuredRoot string) (string, error) {
 		currentPath = filepath.Join(currentPath, component)
 		info, err := os.Lstat(currentPath)
 		if os.IsNotExist(err) {
-			if err := os.Mkdir(currentPath, 0o750); err != nil && !os.IsExist(err) {
-				return "", fmt.Errorf("create local volume root component: %w", err)
-			}
-			info, err = os.Lstat(currentPath)
+			return "", fmt.Errorf("local volume root does not exist: %s", rootPath)
 		}
 		if err != nil {
 			return "", fmt.Errorf("inspect local volume root component: %w", err)
@@ -177,19 +174,14 @@ func validateLocalVolumeRoot(configuredRoot string) (string, error) {
 
 func (d *DockerClient) resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
 	switch vol.Backend {
-	case "", "cos":
-		return resolveVolumeMountPaths(vol)
 	case localVolumeBackend:
 		return d.prepareLocalVolumeMountPaths(vol)
 	default:
-		return "", "", fmt.Errorf("unsupported volume backend %q", vol.Backend)
+		return "", "", fmt.Errorf("runner only supports local volumes, got backend %q", vol.Backend)
 	}
 }
 
 func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, string, error) {
-	if !d.localVolumeEnabled {
-		return "", "", fmt.Errorf("local volume backend is disabled")
-	}
 	if !isValidVolumeId(vol.VolumeId) {
 		return "", "", fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
 	}
@@ -263,54 +255,6 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 		return nil, err
 	}
 
-	// Phase 1: fan out FUSE mounts for unique volumes in parallel. Each
-	// ensureVolumeFuseMounted runs mount-s3 and then waits up to 5s for the
-	// mount to become ready; doing them sequentially made create-time scale
-	// linearly with the number of mounted volumes.
-	uniqueMounts := make(map[string]string, len(volumes)) // volumeIdPrefixed -> baseMountPath
-	for _, vol := range volumes {
-		if vol.Backend == localVolumeBackend {
-			continue
-		}
-		baseMountPath, _, err := resolveVolumeMountPaths(vol)
-		if err != nil {
-			return nil, err
-		}
-		volumeIdPrefixed := filepath.Base(baseMountPath)
-		if _, ok := uniqueMounts[volumeIdPrefixed]; !ok {
-			uniqueMounts[volumeIdPrefixed] = baseMountPath
-		}
-	}
-
-	mountCtx, cancelMounts := context.WithCancel(ctx)
-	defer cancelMounts()
-
-	var (
-		wg       sync.WaitGroup
-		errMu    sync.Mutex
-		firstErr error
-	)
-	for volumeIdPrefixed, baseMountPath := range uniqueMounts {
-		wg.Add(1)
-		go func(volumeId, mountPath string) {
-			defer wg.Done()
-			if err := d.ensureVolumeFuseMounted(mountCtx, volumeId, mountPath); err != nil {
-				errMu.Lock()
-				if firstErr == nil {
-					firstErr = err
-					cancelMounts()
-				}
-				errMu.Unlock()
-			}
-		}(strings.TrimPrefix(volumeIdPrefixed, volumeMountPrefix), baseMountPath)
-	}
-	wg.Wait()
-	if firstErr != nil {
-		return nil, firstErr
-	}
-
-	// Phase 2: build bind strings in input order. Subpath mkdir is cheap and
-	// kept sequential so the returned slice order matches volumes.
 	volumeMountPathBinds := make([]string, 0, len(volumes))
 	for _, vol := range volumes {
 		_, bindSource, err := d.resolveVolumeMountPaths(vol)
@@ -320,13 +264,6 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 		subpathStr := ""
 		if vol.Subpath != nil {
 			subpathStr = *vol.Subpath
-		}
-
-		if vol.Backend != localVolumeBackend && vol.Subpath != nil && *vol.Subpath != "" {
-			err := os.MkdirAll(bindSource, 0755)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)
-			}
 		}
 
 		d.logger.DebugContext(ctx, "binding volume subpath", "volumeId", volumeMountPrefix+vol.VolumeId, "subpath", subpathStr, "mountPath", vol.MountPath)

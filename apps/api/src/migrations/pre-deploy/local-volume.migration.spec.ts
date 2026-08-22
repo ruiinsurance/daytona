@@ -5,6 +5,7 @@
 
 import type { QueryRunner } from 'typeorm'
 import { Migration1787366200699 } from './1787366200699-migration'
+import { Migration1787392524000 } from './1787392524000-migration'
 
 describe('local volume migration', () => {
   it('adds backward-compatible defaults and reverses in dependency order', async () => {
@@ -28,5 +29,22 @@ describe('local volume migration', () => {
       `ALTER TABLE "runner" DROP COLUMN "localVolumeEnabled"`,
       `ALTER TABLE "sandbox" DROP COLUMN "storageBackend"`,
     ])
+  })
+
+  it('makes local storage the default without rewriting legacy rows', async () => {
+    const queries: string[] = []
+    const queryRunner = {
+      query: jest.fn(async (sql: string) => {
+        queries.push(sql)
+      }),
+    } as unknown as QueryRunner
+    const migration = new Migration1787392524000()
+
+    await migration.up(queryRunner)
+    expect(queries).toEqual([`ALTER TABLE "sandbox" ALTER COLUMN "storageBackend" SET DEFAULT 'local'`])
+
+    queries.length = 0
+    await migration.down(queryRunner)
+    expect(queries).toEqual([`ALTER TABLE "sandbox" ALTER COLUMN "storageBackend" SET DEFAULT 'cos'`])
   })
 })

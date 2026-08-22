@@ -77,6 +77,7 @@ def build_sandbox_dto(overrides = {}) # rubocop:disable Metrics/MethodLength
     disk: 30,
     state: 'started',
     desired_state: 'started',
+    storage_backend: 'local',
     error_reason: nil,
     backup_state: nil,
     backup_created_at: nil,

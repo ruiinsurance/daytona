@@ -65,7 +65,6 @@ func TestValidateLocalInspectBindRequiresExactBindSource(t *testing.T) {
 func TestVerifyLocalContainerInspectMountsChecksReplacementBinds(t *testing.T) {
 	root := t.TempDir()
 	client := newStartTestDockerClient(nil)
-	client.localVolumeEnabled = true
 	client.localVolumeRoot = root
 	subpath := "sandboxes/22222222-2222-4222-8222-222222222222/workspace"
 	volumes := []dto.VolumeDTO{

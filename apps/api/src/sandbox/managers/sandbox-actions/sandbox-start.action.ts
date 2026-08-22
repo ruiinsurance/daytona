@@ -58,6 +58,11 @@ export class SandboxStartAction extends SandboxAction {
 
   @WithSpan()
   async run(sandbox: Sandbox, lockCode: LockCode): Promise<SyncState> {
+    if (!isLocalVolumeSandbox(sandbox)) {
+      this.logger.error(`Sandbox ${sandbox.id} uses unsupported storage backend ${sandbox.storageBackend}`)
+      return DONT_SYNC_AGAIN
+    }
+
     // Load buildInfo only for states that need it — avoids a JOIN+DISTINCT in the
     // shared syncInstanceState query that stop/destroy/archive paths never use.
     if (
@@ -598,8 +603,11 @@ export class SandboxStartAction extends SandboxAction {
         this.logger.warn(`Local volume owner is unavailable for sandbox ${sandbox.id}`, error)
         return DONT_SYNC_AGAIN
       }
+      if (!owner) {
+        return DONT_SYNC_AGAIN
+      }
       if (sandbox.state === SandboxState.ARCHIVED) {
-        return this.recreateLocalSandboxOnOwner(sandbox, lockCode, organization, owner!)
+        return this.recreateLocalSandboxOnOwner(sandbox, lockCode, organization, owner)
       }
     }
 

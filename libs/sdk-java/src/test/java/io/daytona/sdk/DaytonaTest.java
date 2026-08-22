@@ -42,6 +42,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,8 +97,24 @@ class DaytonaTest {
         assertThat(sandbox.getId()).isEqualTo("sb-1");
         ArgumentCaptor<CreateSandbox> captor = ArgumentCaptor.forClass(CreateSandbox.class);
         org.mockito.Mockito.verify(sandboxApi).createSandbox(captor.capture(), isNull());
+        assertThat(captor.getValue().getId()).isNotNull();
+        assertThat(captor.getValue().getId().version()).isEqualTo(4);
         assertThat(captor.getValue().getLabels()).containsEntry(Daytona.CODE_TOOLBOX_LANGUAGE_LABEL, "python");
         assertThat(captor.getValue().getTarget()).isEqualTo("eu");
+    }
+
+    @Test
+    void createForwardsExplicitSandboxId() {
+        UUID sandboxId = UUID.fromString("123e4567-e89b-42d3-a456-426614174000");
+        when(sandboxApi.createSandbox(any(), isNull())).thenReturn(TestSupport.mainSandbox("sb-1", SandboxState.STARTED));
+
+        CreateSandboxFromSnapshotParams params = new CreateSandboxFromSnapshotParams();
+        params.setId(sandboxId);
+        daytona.create(params, 1);
+
+        ArgumentCaptor<CreateSandbox> captor = ArgumentCaptor.forClass(CreateSandbox.class);
+        org.mockito.Mockito.verify(sandboxApi).createSandbox(captor.capture(), isNull());
+        assertThat(captor.getValue().getId()).isEqualTo(sandboxId);
     }
 
     @Test

@@ -4,6 +4,7 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'securerandom'
 require 'uri'
 
 module Daytona
@@ -204,6 +205,7 @@ module Daytona
       labels[CODE_TOOLBOX_LANGUAGE_LABEL] = params.language.to_s if params.language
 
       create_sandbox = DaytonaApiClient::CreateSandbox.new(
+        id: params.id || SecureRandom.uuid,
         user: params.os_user,
         env: params.env_vars || {},
         labels: labels,

@@ -21,16 +21,13 @@ import type { CreateBuildInfo } from './create-build-info';
 import type { GpuType } from './gpu-type';
 // May contain unused imports in some cases
 // @ts-ignore
-import type { SandboxStorageBackend } from './sandbox-storage-backend';
-// May contain unused imports in some cases
-// @ts-ignore
 import type { SandboxVolume } from './sandbox-volume';
 
 export interface CreateSandbox {
     /**
      * Stable sandbox identity supplied by a trusted control plane
      */
-    'id'?: string;
+    'id': string;
     /**
      * The name of the sandbox. If not provided, the sandbox ID will be used as the name
      */
@@ -71,10 +68,6 @@ export interface CreateSandbox {
      * The target (region) where the sandbox will be created
      */
     'target'?: string;
-    /**
-     * Storage backend for this sandbox. Local storage must be enabled by the operator.
-     */
-    'storageBackend'?: SandboxStorageBackend;
     /**
      * CPU cores allocated to the sandbox
      */

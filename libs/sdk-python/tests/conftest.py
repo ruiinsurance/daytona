@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from daytona_api_client import Sandbox as SyncSandboxDto
-from daytona_api_client import SandboxState
+from daytona_api_client import SandboxState, SandboxStorageBackend
 
 SDK_SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SDK_SRC) not in sys.path:
@@ -44,6 +44,7 @@ def make_sandbox_dto(
         labels=cast(dict[str, str], kwargs.get("labels", {"code-toolbox-language": "python"})),
         public=cast(bool, kwargs.get("public", False)),
         target=cast(str, kwargs.get("target", target)),
+        storage_backend=cast(SandboxStorageBackend, kwargs.get("storage_backend", SandboxStorageBackend.LOCAL)),
         cpu=cast(int, kwargs.get("cpu", cpu)),
         gpu=cast(int, kwargs.get("gpu", gpu)),
         memory=cast(int, kwargs.get("memory", memory)),

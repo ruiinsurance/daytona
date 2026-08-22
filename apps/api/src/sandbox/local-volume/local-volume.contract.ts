@@ -6,6 +6,7 @@
 import { RunnerState } from '../enums/runner-state.enum'
 import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import { OwnerRunnerUnavailableError } from '../errors/owner-runner-unavailable.error'
+import { UnsupportedSandboxStorageBackendError } from '../errors/unsupported-sandbox-storage-backend.error'
 
 export interface LocalVolumeMount {
   volumeId: string
@@ -36,6 +37,12 @@ export interface RunnerServiceHealthCapability {
 
 export function isLocalVolumeSandbox(sandbox: Pick<LocalVolumeSandbox, 'storageBackend'>): boolean {
   return sandbox.storageBackend === SandboxStorageBackend.LOCAL
+}
+
+export function assertLocalStorageBackend(sandbox: Pick<LocalVolumeSandbox, 'storageBackend'>): void {
+  if (!isLocalVolumeSandbox(sandbox)) {
+    throw new UnsupportedSandboxStorageBackendError(sandbox.storageBackend)
+  }
 }
 
 export function allowsAutomaticOwnerChange(sandbox: Pick<LocalVolumeSandbox, 'storageBackend'>): boolean {

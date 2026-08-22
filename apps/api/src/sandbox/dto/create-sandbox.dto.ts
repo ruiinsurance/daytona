@@ -19,24 +19,22 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Transform, Type } from 'class-transformer'
-import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { SandboxVolume } from './sandbox.dto'
 import { CreateBuildInfoDto } from './create-build-info.dto'
 import { IsSafeDisplayString } from '../../common/validators'
 import { GpuType } from '../enums/gpu-type.enum'
 import { CANONICAL_V4_UUID_RE } from '../../common/utils/uuid'
-import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 
 @ApiSchema({ name: 'CreateSandbox' })
 export class CreateSandboxDto {
-  @ApiPropertyOptional({
+  @ApiProperty({
     description: 'Stable sandbox identity supplied by a trusted control plane',
     format: 'uuid',
   })
-  @IsOptional()
   @IsUUID('4')
   @Matches(CANONICAL_V4_UUID_RE)
-  id?: string
+  id: string
 
   @ApiPropertyOptional({
     description: 'The name of the sandbox. If not provided, the sandbox ID will be used as the name',
@@ -122,16 +120,6 @@ export class CreateSandboxDto {
   @IsOptional()
   @IsString()
   target?: string
-
-  @ApiPropertyOptional({
-    description: 'Storage backend for this sandbox. Local storage must be enabled by the operator.',
-    enum: SandboxStorageBackend,
-    enumName: 'SandboxStorageBackend',
-    default: SandboxStorageBackend.COS,
-  })
-  @IsOptional()
-  @IsEnum(SandboxStorageBackend)
-  storageBackend?: SandboxStorageBackend
 
   @ApiPropertyOptional({
     description: 'CPU cores allocated to the sandbox',
