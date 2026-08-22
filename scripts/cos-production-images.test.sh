@@ -100,7 +100,7 @@ else
   fail 'plan reports an enabled Alpine package mirror without printing its URL'
 fi
 
-if printf '%s\n' "${plan}" | grep -Fq $'source_revision\t70e556d2c548c8964ba7c53cbb01b5587e87d2e6'; then
+if printf '%s\n' "${plan}" | grep -Fq $'source_revision\t94c2d7c362ada11e04cfd7cebc9e42fb92b53e1a'; then
   pass 'plan reports the immutable local-first V1 source revision'
 else
   fail 'plan reports the immutable local-first V1 source revision'
@@ -128,12 +128,12 @@ expect_failure \
 
 expect_failure \
   'wrong source revision is rejected' \
-  'source revision must equal 70e556d2c548c8964ba7c53cbb01b5587e87d2e6' \
+  'source revision must equal 94c2d7c362ada11e04cfd7cebc9e42fb92b53e1a' \
   env DAYTONA_SOURCE_REVISION=deadbeef bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/revision"
 
 expect_failure \
   'legacy COS source revision is rejected' \
-  'source revision must equal 70e556d2c548c8964ba7c53cbb01b5587e87d2e6' \
+  'source revision must equal 94c2d7c362ada11e04cfd7cebc9e42fb92b53e1a' \
   env DAYTONA_SOURCE_REVISION=38ecad62c7e65d3fc8df6307ebee25cdb866e364 \
   bash "${SCRIPT}" plan --output-dir "${TEST_ROOT}/legacy-revision"
 
@@ -373,7 +373,7 @@ case "${1:-}" in
         printf 'https://github.com/ruiinsurance/daytona\n'
         ;;
       '{{index .Config.Labels "org.opencontainers.image.revision"}}')
-        printf '70e556d2c548c8964ba7c53cbb01b5587e87d2e6\n'
+        printf '94c2d7c362ada11e04cfd7cebc9e42fb92b53e1a\n'
         ;;
       '{{index .Config.Labels "org.opencontainers.image.version"}}')
         printf 'v0.190.0-local-first-2862ea87\n'
