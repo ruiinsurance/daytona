@@ -20,6 +20,7 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import io.daytona.api.client.model.CreateBuildInfo;
 import io.daytona.api.client.model.GpuType;
+import io.daytona.api.client.model.SandboxStorageBackend;
 import io.daytona.api.client.model.SandboxVolume;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +44,14 @@ public class CreateSandboxTest {
     @Test
     public void testCreateSandbox() {
         // TODO: test CreateSandbox
+    }
+
+    /**
+     * Test the property 'id'
+     */
+    @Test
+    public void idTest() {
+        // TODO: test id
     }
 
     /**
@@ -122,6 +132,14 @@ public class CreateSandboxTest {
     @Test
     public void targetTest() {
         // TODO: test target
+    }
+
+    /**
+     * Test the property 'storageBackend'
+     */
+    @Test
+    public void storageBackendTest() {
+        // TODO: test storageBackend
     }
 
     /**

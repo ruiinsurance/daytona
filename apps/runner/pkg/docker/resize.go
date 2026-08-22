@@ -30,7 +30,7 @@ func (d *DockerClient) Resize(ctx context.Context, sandboxId string, sandboxDto 
 			return fmt.Errorf("disk resize requires stopped container")
 		}
 
-		err = d.ContainerDiskResize(ctx, sandboxId, float64(sandboxDto.Disk), sandboxDto.Cpu, sandboxDto.Memory, "resize", sandboxDto.Registry)
+		err = d.ContainerDiskResize(ctx, sandboxId, float64(sandboxDto.Disk), sandboxDto.Cpu, sandboxDto.Memory, "resize", sandboxDto.Registry, sandboxDto.Volumes)
 		if err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ func (d *DockerClient) Resize(ctx context.Context, sandboxId string, sandboxDto 
 // Optionally updates CPU/memory at the same time (0 = don't change).
 // Used by both storage recovery and disk resize.
 // Container must be stopped before calling this function.
-func (d *DockerClient) ContainerDiskResize(ctx context.Context, sandboxId string, newStorageGB float64, cpu int64, memory int64, operationName string, registry *dto.RegistryDTO) error {
+func (d *DockerClient) ContainerDiskResize(ctx context.Context, sandboxId string, newStorageGB float64, cpu int64, memory int64, operationName string, registry *dto.RegistryDTO, volumes []dto.VolumeDTO) error {
 	if d.filesystem != "xfs" {
 		return fmt.Errorf("%s requires XFS filesystem, current filesystem: %s", operationName, d.filesystem)
 	}
@@ -78,6 +78,9 @@ func (d *DockerClient) ContainerDiskResize(ctx context.Context, sandboxId string
 	originalContainer, err := d.ContainerInspect(ctx, sandboxId)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container: %w", err)
+	}
+	if err := d.verifyLocalContainerInspectMounts(originalContainer, volumes); err != nil {
+		return fmt.Errorf("verify local mounts before %s replacement: %w", operationName, err)
 	}
 
 	// Get overlay2 path for data copy
@@ -150,6 +153,18 @@ func (d *DockerClient) ContainerDiskResize(ctx context.Context, sandboxId string
 	if err != nil {
 		_ = d.apiClient.ContainerRename(ctx, oldName, sandboxId)
 		return fmt.Errorf("failed to create new container: %w", err)
+	}
+
+	replacementContainer, err := d.ContainerInspect(ctx, sandboxId)
+	if err != nil {
+		_ = d.apiClient.ContainerRemove(ctx, sandboxId, container.RemoveOptions{Force: true})
+		_ = d.apiClient.ContainerRename(ctx, oldName, sandboxId)
+		return fmt.Errorf("inspect replacement container: %w", err)
+	}
+	if err := d.verifyLocalContainerInspectMounts(replacementContainer, volumes); err != nil {
+		_ = d.apiClient.ContainerRemove(ctx, sandboxId, container.RemoveOptions{Force: true})
+		_ = d.apiClient.ContainerRename(ctx, oldName, sandboxId)
+		return fmt.Errorf("verify local mounts after %s replacement: %w", operationName, err)
 	}
 
 	// Copy data directly between overlay2 layers using rsync

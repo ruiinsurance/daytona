@@ -48,6 +48,8 @@ import Redis from 'ioredis'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { normalizeGpuType } from '../utils/gpu-type-normalizer.util'
+import { reportsLocalVolumeCapability } from '../local-volume/local-volume.contract'
+import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import { SnapshotRepository } from '../repositories/snapshot.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
@@ -304,6 +306,10 @@ export class RunnerService {
         : MoreThanOrEqual(this.configService.getOrThrow('runnerScore.thresholds.availability')),
     }
 
+    if (params.localVolumeEnabled !== undefined) {
+      runnerFilter.localVolumeEnabled = params.localVolumeEnabled
+    }
+
     if (params.gpu > 0) {
       runnerFilter.gpu = MoreThanOrEqual(params.gpu)
       if (typeof params.gpuType === 'string') {
@@ -403,7 +409,14 @@ export class RunnerService {
     }
 
     const sandboxCount = await this.sandboxRepository.count({
-      where: { runnerId: id, state: Not(In([SandboxState.ARCHIVED, SandboxState.DESTROYED])) },
+      where: [
+        { runnerId: id, state: Not(In([SandboxState.ARCHIVED, SandboxState.DESTROYED])) },
+        {
+          runnerId: id,
+          storageBackend: SandboxStorageBackend.LOCAL,
+          state: Not(SandboxState.DESTROYED),
+        },
+      ],
     })
     if (sandboxCount > 0) {
       throw new BadRequestError('Cannot delete runner which has sandboxes associated with it')
@@ -474,9 +487,11 @@ export class RunnerService {
 
     if (serviceHealth !== undefined) {
       updateData.serviceHealth = serviceHealth
+      updateData.localVolumeEnabled = reportsLocalVolumeCapability(serviceHealth)
     } else {
       // Clear any previously stored service health when no new health data is provided
       updateData.serviceHealth = null
+      updateData.localVolumeEnabled = false
     }
 
     const unhealthyServices = serviceHealth?.filter((s) => !s.healthy) ?? []
@@ -1234,6 +1249,7 @@ export class GetRunnerParams {
   snapshotRef?: string
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  localVolumeEnabled?: boolean
   // When > 0, only consider runners that have at least this much GPU capacity
   // and have not yet reached their GPU sandbox capacity (a runner with
   // runner.gpu = N can host up to N concurrent GPU sandboxes).

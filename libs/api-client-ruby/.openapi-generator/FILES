@@ -169,6 +169,7 @@ lib/daytona_api_client/models/sandbox_list_item.rb
 lib/daytona_api_client/models/sandbox_list_sort_direction.rb
 lib/daytona_api_client/models/sandbox_list_sort_field.rb
 lib/daytona_api_client/models/sandbox_state.rb
+lib/daytona_api_client/models/sandbox_storage_backend.rb
 lib/daytona_api_client/models/sandbox_volume.rb
 lib/daytona_api_client/models/screenshot_response.rb
 lib/daytona_api_client/models/search_files_response.rb

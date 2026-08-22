@@ -53,6 +53,7 @@ type ResizeSandboxDTO struct {
 	Gpu      int64        `json:"gpu,omitempty" validate:"omitempty,min=0"`
 	Memory   int64        `json:"memory,omitempty" validate:"omitempty,min=1"`
 	Disk     int64        `json:"disk,omitempty" validate:"omitempty,min=1"`
+	Volumes  []VolumeDTO  `json:"volumes,omitempty"`
 	Registry *RegistryDTO `json:"registry,omitempty"`
 } //	@name	ResizeSandboxDTO
 

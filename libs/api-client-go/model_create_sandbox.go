@@ -20,6 +20,8 @@ var _ MappedNullable = &CreateSandbox{}
 
 // CreateSandbox struct for CreateSandbox
 type CreateSandbox struct {
+	// Stable sandbox identity supplied by a trusted control plane
+	Id *string `json:"id,omitempty"`
 	// The name of the sandbox. If not provided, the sandbox ID will be used as the name
 	Name *string `json:"name,omitempty"`
 	// The ID or name of the snapshot used for the sandbox
@@ -40,6 +42,8 @@ type CreateSandbox struct {
 	DomainAllowList *string `json:"domainAllowList,omitempty"`
 	// The target (region) where the sandbox will be created
 	Target *string `json:"target,omitempty"`
+	// Storage backend for this sandbox. Local storage must be enabled by the operator.
+	StorageBackend *SandboxStorageBackend `json:"storageBackend,omitempty"`
 	// CPU cores allocated to the sandbox
 	Cpu *int32 `json:"cpu,omitempty"`
 	// GPU units allocated to the sandbox
@@ -61,7 +65,7 @@ type CreateSandbox struct {
 	// Build information for the sandbox
 	BuildInfo *CreateBuildInfo `json:"buildInfo,omitempty"`
 	// ID or name of an existing sandbox to link the new sandbox to. The new sandbox will be scheduled on the same runner as the linked sandbox so a local network can be established between them. Linked sandboxes must be ephemeral (autoDeleteInterval=0) and cannot themselves be linked to another sandbox.
-	LinkedSandbox *string `json:"linkedSandbox,omitempty"`
+	LinkedSandbox        *string `json:"linkedSandbox,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -73,6 +77,8 @@ type _CreateSandbox CreateSandbox
 // will change when the set of required properties is changed
 func NewCreateSandbox() *CreateSandbox {
 	this := CreateSandbox{}
+	var storageBackend SandboxStorageBackend = SANDBOXSTORAGEBACKEND_COS
+	this.StorageBackend = &storageBackend
 	return &this
 }
 
@@ -81,7 +87,41 @@ func NewCreateSandbox() *CreateSandbox {
 // but it doesn't guarantee that properties required by API are set
 func NewCreateSandboxWithDefaults() *CreateSandbox {
 	this := CreateSandbox{}
+	var storageBackend SandboxStorageBackend = SANDBOXSTORAGEBACKEND_COS
+	this.StorageBackend = &storageBackend
 	return &this
+}
+
+// GetId returns the Id field value if set, zero value otherwise.
+func (o *CreateSandbox) GetId() string {
+	if o == nil || IsNil(o.Id) {
+		var ret string
+		return ret
+	}
+	return *o.Id
+}
+
+// GetIdOk returns a tuple with the Id field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateSandbox) GetIdOk() (*string, bool) {
+	if o == nil || IsNil(o.Id) {
+		return nil, false
+	}
+	return o.Id, true
+}
+
+// HasId returns a boolean if a field has been set.
+func (o *CreateSandbox) HasId() bool {
+	if o != nil && !IsNil(o.Id) {
+		return true
+	}
+
+	return false
+}
+
+// SetId gets a reference to the given string and assigns it to the Id field.
+func (o *CreateSandbox) SetId(v string) {
+	o.Id = &v
 }
 
 // GetName returns the Name field value if set, zero value otherwise.
@@ -402,6 +442,38 @@ func (o *CreateSandbox) HasTarget() bool {
 // SetTarget gets a reference to the given string and assigns it to the Target field.
 func (o *CreateSandbox) SetTarget(v string) {
 	o.Target = &v
+}
+
+// GetStorageBackend returns the StorageBackend field value if set, zero value otherwise.
+func (o *CreateSandbox) GetStorageBackend() SandboxStorageBackend {
+	if o == nil || IsNil(o.StorageBackend) {
+		var ret SandboxStorageBackend
+		return ret
+	}
+	return *o.StorageBackend
+}
+
+// GetStorageBackendOk returns a tuple with the StorageBackend field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateSandbox) GetStorageBackendOk() (*SandboxStorageBackend, bool) {
+	if o == nil || IsNil(o.StorageBackend) {
+		return nil, false
+	}
+	return o.StorageBackend, true
+}
+
+// HasStorageBackend returns a boolean if a field has been set.
+func (o *CreateSandbox) HasStorageBackend() bool {
+	if o != nil && !IsNil(o.StorageBackend) {
+		return true
+	}
+
+	return false
+}
+
+// SetStorageBackend gets a reference to the given SandboxStorageBackend and assigns it to the StorageBackend field.
+func (o *CreateSandbox) SetStorageBackend(v SandboxStorageBackend) {
+	o.StorageBackend = &v
 }
 
 // GetCpu returns the Cpu field value if set, zero value otherwise.
@@ -757,7 +829,7 @@ func (o *CreateSandbox) SetLinkedSandbox(v string) {
 }
 
 func (o CreateSandbox) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -766,6 +838,9 @@ func (o CreateSandbox) MarshalJSON() ([]byte, error) {
 
 func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.Id) {
+		toSerialize["id"] = o.Id
+	}
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
@@ -795,6 +870,9 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.Target) {
 		toSerialize["target"] = o.Target
+	}
+	if !IsNil(o.StorageBackend) {
+		toSerialize["storageBackend"] = o.StorageBackend
 	}
 	if !IsNil(o.Cpu) {
 		toSerialize["cpu"] = o.Cpu
@@ -851,6 +929,7 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "id")
 		delete(additionalProperties, "name")
 		delete(additionalProperties, "snapshot")
 		delete(additionalProperties, "user")
@@ -861,6 +940,7 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "networkAllowList")
 		delete(additionalProperties, "domainAllowList")
 		delete(additionalProperties, "target")
+		delete(additionalProperties, "storageBackend")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "gpu")
 		delete(additionalProperties, "gpuType")
@@ -913,5 +993,3 @@ func (v *NullableCreateSandbox) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
-
-

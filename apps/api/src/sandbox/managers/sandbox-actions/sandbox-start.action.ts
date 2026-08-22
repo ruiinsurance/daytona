@@ -31,6 +31,12 @@ import Redis from 'ioredis'
 import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { SandboxActivityService } from '../../services/sandbox-activity.service'
 import { getRunnerSandboxClass, isRegistryBasedSandboxClass } from '../../utils/sandbox-class.util'
+import {
+  assertLocalOwnerAvailable,
+  allowsAutomaticOwnerChange,
+  buildRunnerVolumes,
+  isLocalVolumeSandbox,
+} from '../../local-volume/local-volume.contract'
 
 @Injectable()
 export class SandboxStartAction extends SandboxAction {
@@ -63,6 +69,9 @@ export class SandboxStartAction extends SandboxAction {
 
     switch (sandbox.state) {
       case SandboxState.PULLING_SNAPSHOT: {
+        if (isLocalVolumeSandbox(sandbox)) {
+          return this.handleUnassignedRunnerSandbox(sandbox, lockCode)
+        }
         if (!sandbox.runnerId) {
           // Using the PULLING_SNAPSHOT state for the case where the runner isn't assigned yet as well
           return this.handleUnassignedRunnerSandbox(sandbox, lockCode)
@@ -172,12 +181,17 @@ export class SandboxStartAction extends SandboxAction {
   ): Promise<SyncState> {
     // Get snapshot reference based on whether it's a pull or build operation
     let snapshotRef: string
+    let snapshot: Snapshot | undefined
 
     if (isBuild) {
       snapshotRef = sandbox.buildInfo.snapshotRef
     } else {
-      const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
+      snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
       snapshotRef = snapshot.ref
+    }
+
+    if (isLocalVolumeSandbox(sandbox)) {
+      return this.prepareLocalSandboxOnOwner(sandbox, lockCode, snapshotRef, isBuild, snapshot)
     }
 
     const declarativeBuildScoreThreshold = this.configService.get('runnerScore.thresholds.declarativeBuild')
@@ -318,6 +332,82 @@ export class SandboxStartAction extends SandboxAction {
     return SYNC_AGAIN
   }
 
+  private async prepareLocalSandboxOnOwner(
+    sandbox: Sandbox,
+    lockCode: LockCode,
+    snapshotRef: string,
+    isBuild: boolean,
+    snapshot?: Snapshot,
+  ): Promise<SyncState> {
+    const owner = sandbox.runnerId ? await this.runnerService.findOne(sandbox.runnerId) : null
+    try {
+      assertLocalOwnerAvailable(sandbox, owner)
+    } catch (error) {
+      this.logger.warn(`Local volume owner is unavailable while preparing sandbox ${sandbox.id}`, error)
+      return DONT_SYNC_AGAIN
+    }
+    if (!owner) {
+      return DONT_SYNC_AGAIN
+    }
+
+    const snapshotRunner = await this.runnerService.getSnapshotRunner(owner.id, snapshotRef)
+    if (snapshotRunner?.state === SnapshotRunnerState.READY) {
+      await this.updateSandboxState(sandbox, SandboxState.UNKNOWN, lockCode, owner.id)
+      return SYNC_AGAIN
+    }
+    if (snapshotRunner?.state === SnapshotRunnerState.ERROR) {
+      await this.updateSandboxState(
+        sandbox,
+        isBuild ? SandboxState.BUILD_FAILED : SandboxState.ERROR,
+        lockCode,
+        owner.id,
+        snapshotRunner.errorReason,
+      )
+      return DONT_SYNC_AGAIN
+    }
+    if (!isBuild && snapshotRunner?.state === SnapshotRunnerState.PULLING_SNAPSHOT) {
+      try {
+        const runnerAdapter = await this.runnerAdapterFactory.create(owner)
+        if (await runnerAdapter.snapshotExists(snapshotRef)) {
+          await this.runnerService.createSnapshotRunnerEntry(owner.id, snapshotRef, SnapshotRunnerState.READY)
+          await this.updateSandboxState(sandbox, SandboxState.UNKNOWN, lockCode, owner.id)
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to reconcile snapshot ${snapshotRef} on local owner ${owner.id}`, error)
+      }
+      return SYNC_AGAIN
+    }
+    if (snapshotRunner) {
+      return SYNC_AGAIN
+    }
+
+    if (!isBuild) {
+      if (!snapshot) {
+        throw new Error(`Snapshot metadata is required to prepare local volume sandbox ${sandbox.id}`)
+      }
+      await this.runnerService.createSnapshotRunnerEntry(owner.id, snapshotRef, SnapshotRunnerState.PULLING_SNAPSHOT)
+      this.pullSnapshotToRunner(snapshot, owner).catch((error) =>
+        this.logger.error(`Failed to pull snapshot ${snapshotRef} on local owner ${owner.id}`, error),
+      )
+      await this.updateSandboxState(sandbox, SandboxState.PULLING_SNAPSHOT, lockCode, owner.id)
+      return SYNC_AGAIN
+    }
+
+    const runnerAdapter = await this.runnerAdapterFactory.create(owner)
+    const sourceRegistries = await this.dockerRegistryService.getSourceRegistriesForDockerfile(
+      sandbox.buildInfo.dockerfileContent,
+      sandbox.organizationId,
+    )
+    await runnerAdapter.buildSnapshot(
+      sandbox.buildInfo,
+      sandbox.organizationId,
+      sourceRegistries.length > 0 ? sourceRegistries : undefined,
+    )
+    this.pollBuildStatus(sandbox.buildInfo, owner).catch(this.logger.error)
+    await this.updateSandboxState(sandbox, SandboxState.BUILDING_SNAPSHOT, lockCode, owner.id)
+    return SYNC_AGAIN
+  }
+
   private async getBuildInfoOverloadedRunnerIds(snapshotRef: string, requestedCpu: number): Promise<string[]> {
     const maxCpuPerRunner = this.configService.getOrThrow('buildInfo.maxCpuPerRunner')
     if (!(maxCpuPerRunner > 0) || !snapshotRef) {
@@ -339,14 +429,20 @@ export class SandboxStartAction extends SandboxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     // Fire the pull request (runner returns 202 immediately)
-    await runnerAdapter.pullSnapshot(
-      snapshot.ref,
-      internalRegistry,
-      undefined,
-      undefined,
-      undefined,
-      snapshot.sandboxClass,
-    )
+    try {
+      await runnerAdapter.pullSnapshot(
+        snapshot.ref,
+        internalRegistry,
+        undefined,
+        undefined,
+        undefined,
+        snapshot.sandboxClass,
+      )
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await this.runnerService.createSnapshotRunnerEntry(runner.id, snapshot.ref, SnapshotRunnerState.ERROR, message)
+      throw error
+    }
 
     const pollTimeoutMs = 60 * 60 * 1_000 // 1 hour
     const pollIntervalMs = 5 * 1_000 // 5 seconds
@@ -355,14 +451,30 @@ export class SandboxStartAction extends SandboxAction {
     while (Date.now() - startTime < pollTimeoutMs) {
       try {
         await runnerAdapter.getSnapshotInfo(snapshot.ref)
+        await this.runnerService.createSnapshotRunnerEntry(runner.id, snapshot.ref, SnapshotRunnerState.READY)
         return
       } catch (err) {
         if (err instanceof SnapshotStateError) {
+          await this.runnerService.createSnapshotRunnerEntry(
+            runner.id,
+            snapshot.ref,
+            SnapshotRunnerState.ERROR,
+            err.message,
+          )
           throw err
         }
       }
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
     }
+
+    const timeoutError = new Error(`Timeout while pulling snapshot ${snapshot.ref} on runner ${runner.id}`)
+    await this.runnerService.createSnapshotRunnerEntry(
+      runner.id,
+      snapshot.ref,
+      SnapshotRunnerState.ERROR,
+      timeoutError.message,
+    )
+    throw timeoutError
   }
 
   // Polls the snapshot build status on the runner and creates the SnapshotRunner entry based on the result
@@ -415,6 +527,14 @@ export class SandboxStartAction extends SandboxAction {
     lockCode: LockCode,
   ): Promise<SyncState> {
     const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
+    if (isLocalVolumeSandbox(sandbox)) {
+      try {
+        assertLocalOwnerAvailable(sandbox, runner)
+      } catch (error) {
+        this.logger.warn(`Local volume owner is unavailable while creating sandbox ${sandbox.id}`, error)
+        return DONT_SYNC_AGAIN
+      }
+    }
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }
@@ -470,10 +590,23 @@ export class SandboxStartAction extends SandboxAction {
   ): Promise<SyncState> {
     const organization = await this.organizationService.findOne(sandbox.organizationId)
 
+    if (isLocalVolumeSandbox(sandbox)) {
+      const owner = sandbox.runnerId ? await this.runnerService.findOne(sandbox.runnerId) : null
+      try {
+        assertLocalOwnerAvailable(sandbox, owner)
+      } catch (error) {
+        this.logger.warn(`Local volume owner is unavailable for sandbox ${sandbox.id}`, error)
+        return DONT_SYNC_AGAIN
+      }
+      if (sandbox.state === SandboxState.ARCHIVED) {
+        return this.recreateLocalSandboxOnOwner(sandbox, lockCode, organization, owner!)
+      }
+    }
+
     //  check if sandbox is assigned to a runner and if that runner is unschedulable
     //  if it is, move sandbox to prevRunnerId, and set runnerId to null
     //  this will assign a new runner to the sandbox and restore the sandbox from the latest backup
-    if (sandbox.runnerId) {
+    if (sandbox.runnerId && allowsAutomaticOwnerChange(sandbox)) {
       const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
       const originalRunnerId = sandbox.runnerId // Store original value
 
@@ -552,9 +685,7 @@ export class SandboxStartAction extends SandboxAction {
 
       const metadata: { [key: string]: string } = { ...organization?.sandboxMetadata }
       if (sandbox.volumes?.length) {
-        metadata['volumes'] = JSON.stringify(
-          sandbox.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
-        )
+        metadata['volumes'] = JSON.stringify(buildRunnerVolumes(sandbox))
       }
       if (sandbox.domainAllowList) {
         metadata['domainAllowList'] = sandbox.domainAllowList
@@ -564,7 +695,7 @@ export class SandboxStartAction extends SandboxAction {
         await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, metadata)
       } catch (error) {
         // Check against a list of substrings that should trigger an automatic recovery
-        if (error?.message) {
+        if (allowsAutomaticOwnerChange(sandbox) && error?.message) {
           const matchesRecovery = RECOVERY_ERROR_SUBSTRINGS.some((substring) =>
             error.message.toLowerCase().includes(substring.toLowerCase()),
           )
@@ -588,6 +719,52 @@ export class SandboxStartAction extends SandboxAction {
     return SYNC_AGAIN
   }
 
+  private async recreateLocalSandboxOnOwner(
+    sandbox: Sandbox,
+    lockCode: LockCode,
+    organization: Organization | null,
+    owner: Runner,
+  ): Promise<SyncState> {
+    const runnerAdapter = await this.runnerAdapterFactory.create(owner)
+    let snapshotRef = sandbox.backupSnapshot
+    let registry = sandbox.backupRegistryId
+      ? ((await this.dockerRegistryService.findOne(sandbox.backupRegistryId)) ?? undefined)
+      : undefined
+    let entrypoint: string[] | undefined
+
+    if (!snapshotRef) {
+      if (sandbox.buildInfo) {
+        snapshotRef = sandbox.buildInfo.snapshotRef
+        entrypoint = this.snapshotService.getEntrypointFromDockerfile(sandbox.buildInfo.dockerfileContent)
+      } else {
+        const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
+        snapshotRef = snapshot.ref
+        entrypoint = snapshot.entrypoint
+        if (isRegistryBasedSandboxClass(snapshot.sandboxClass)) {
+          registry = await this.dockerRegistryService.findInternalRegistryBySnapshotRef(snapshotRef, owner.region)
+        }
+      }
+    }
+
+    if (!snapshotRef) {
+      throw new Error(`No replacement snapshot is available for local volume sandbox ${sandbox.id}`)
+    }
+    const metadata = {
+      ...organization?.sandboxMetadata,
+      sandboxName: sandbox.name,
+    }
+    const result = await runnerAdapter.createSandbox(
+      sandbox,
+      snapshotRef,
+      registry,
+      entrypoint,
+      metadata,
+      this.configService.get('otelCollector.endpointUrl'),
+    )
+    await this.updateSandboxState(sandbox, SandboxState.CREATING, lockCode, owner.id, undefined, result?.daemonVersion)
+    return SYNC_AGAIN
+  }
+
   private async handleRunnerSandboxPausedStateOnDesiredStateStart(
     sandbox: Sandbox,
     lockCode: LockCode,
@@ -598,6 +775,14 @@ export class SandboxStartAction extends SandboxAction {
     }
 
     const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
+    if (isLocalVolumeSandbox(sandbox)) {
+      try {
+        assertLocalOwnerAvailable(sandbox, runner)
+      } catch (error) {
+        this.logger.warn(`Local volume owner is unavailable for paused sandbox ${sandbox.id}`, error)
+        return DONT_SYNC_AGAIN
+      }
+    }
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN
     }

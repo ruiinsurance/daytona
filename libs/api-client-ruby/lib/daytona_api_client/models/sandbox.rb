@@ -51,6 +51,9 @@ module DaytonaApiClient
     # The target environment for the sandbox
     attr_accessor :target
 
+    # Persisted storage backend for the sandbox
+    attr_accessor :storage_backend
+
     # The CPU quota for the sandbox
     attr_accessor :cpu
 
@@ -160,6 +163,7 @@ module DaytonaApiClient
         :'network_allow_list' => :'networkAllowList',
         :'domain_allow_list' => :'domainAllowList',
         :'target' => :'target',
+        :'storage_backend' => :'storageBackend',
         :'cpu' => :'cpu',
         :'gpu' => :'gpu',
         :'gpu_type' => :'gpuType',
@@ -212,6 +216,7 @@ module DaytonaApiClient
         :'network_allow_list' => :'String',
         :'domain_allow_list' => :'String',
         :'target' => :'String',
+        :'storage_backend' => :'SandboxStorageBackend',
         :'cpu' => :'Float',
         :'gpu' => :'Float',
         :'gpu_type' => :'GpuType',
@@ -329,6 +334,12 @@ module DaytonaApiClient
         self.target = attributes[:'target']
       else
         self.target = nil
+      end
+
+      if attributes.key?(:'storage_backend')
+        self.storage_backend = attributes[:'storage_backend']
+      else
+        self.storage_backend = nil
       end
 
       if attributes.key?(:'cpu')
@@ -481,6 +492,10 @@ module DaytonaApiClient
         invalid_properties.push('invalid value for "target", target cannot be nil.')
       end
 
+      if @storage_backend.nil?
+        invalid_properties.push('invalid value for "storage_backend", storage_backend cannot be nil.')
+      end
+
       if @cpu.nil?
         invalid_properties.push('invalid value for "cpu", cpu cannot be nil.')
       end
@@ -517,6 +532,7 @@ module DaytonaApiClient
       return false if @public.nil?
       return false if @network_block_all.nil?
       return false if @target.nil?
+      return false if @storage_backend.nil?
       return false if @cpu.nil?
       return false if @gpu.nil?
       return false if @memory.nil?
@@ -620,6 +636,16 @@ module DaytonaApiClient
     end
 
     # Custom attribute writer method with validation
+    # @param [Object] storage_backend Value to be assigned
+    def storage_backend=(storage_backend)
+      if storage_backend.nil?
+        fail ArgumentError, 'storage_backend cannot be nil'
+      end
+
+      @storage_backend = storage_backend
+    end
+
+    # Custom attribute writer method with validation
     # @param [Object] cpu Value to be assigned
     def cpu=(cpu)
       if cpu.nil?
@@ -706,6 +732,7 @@ module DaytonaApiClient
           network_allow_list == o.network_allow_list &&
           domain_allow_list == o.domain_allow_list &&
           target == o.target &&
+          storage_backend == o.storage_backend &&
           cpu == o.cpu &&
           gpu == o.gpu &&
           gpu_type == o.gpu_type &&
@@ -741,7 +768,7 @@ module DaytonaApiClient
     # Calculates hash code according to all attributes.
     # @return [Integer] Hash code
     def hash
-      [id, organization_id, name, snapshot, user, env, labels, public, network_block_all, network_allow_list, domain_allow_list, target, cpu, gpu, gpu_type, memory, disk, state, desired_state, error_reason, recoverable, backup_state, backup_created_at, auto_stop_interval, auto_archive_interval, auto_delete_interval, volumes, build_info, created_at, updated_at, last_activity_at, sandbox_class, daemon_version, runner_id, linked_sandbox_id, toolbox_proxy_url].hash
+      [id, organization_id, name, snapshot, user, env, labels, public, network_block_all, network_allow_list, domain_allow_list, target, storage_backend, cpu, gpu, gpu_type, memory, disk, state, desired_state, error_reason, recoverable, backup_state, backup_created_at, auto_stop_interval, auto_archive_interval, auto_delete_interval, volumes, build_info, created_at, updated_at, last_activity_at, sandbox_class, daemon_version, runner_id, linked_sandbox_id, toolbox_proxy_url].hash
     end
 
     # Builds the object from hash

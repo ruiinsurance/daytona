@@ -141,6 +141,7 @@ export * from './sandbox-list-item';
 export * from './sandbox-list-sort-direction';
 export * from './sandbox-list-sort-field';
 export * from './sandbox-state';
+export * from './sandbox-storage-backend';
 export * from './sandbox-volume';
 export * from './screenshot-response';
 export * from './search-files-response';

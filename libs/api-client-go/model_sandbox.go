@@ -45,6 +45,8 @@ type Sandbox struct {
 	DomainAllowList *string `json:"domainAllowList,omitempty"`
 	// The target environment for the sandbox
 	Target string `json:"target"`
+	// Persisted storage backend for the sandbox
+	StorageBackend SandboxStorageBackend `json:"storageBackend"`
 	// The CPU quota for the sandbox
 	Cpu float32 `json:"cpu"`
 	// The GPU quota for the sandbox
@@ -92,7 +94,7 @@ type Sandbox struct {
 	// ID of the sandbox this sandbox is linked to. When set, the sandbox is co-located on the same runner as the linked sandbox.
 	LinkedSandboxId *string `json:"linkedSandboxId,omitempty"`
 	// The toolbox proxy URL for the sandbox
-	ToolboxProxyUrl string `json:"toolboxProxyUrl"`
+	ToolboxProxyUrl      string `json:"toolboxProxyUrl"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -102,7 +104,7 @@ type _Sandbox Sandbox
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewSandbox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Sandbox {
+func NewSandbox(id string, organizationId string, name string, user string, env map[string]string, labels map[string]string, public bool, networkBlockAll bool, target string, storageBackend SandboxStorageBackend, cpu float32, gpu float32, memory float32, disk float32, toolboxProxyUrl string) *Sandbox {
 	this := Sandbox{}
 	this.Id = id
 	this.OrganizationId = organizationId
@@ -113,6 +115,7 @@ func NewSandbox(id string, organizationId string, name string, user string, env 
 	this.Public = public
 	this.NetworkBlockAll = networkBlockAll
 	this.Target = target
+	this.StorageBackend = storageBackend
 	this.Cpu = cpu
 	this.Gpu = gpu
 	this.Memory = memory
@@ -439,6 +442,30 @@ func (o *Sandbox) GetTargetOk() (*string, bool) {
 // SetTarget sets field value
 func (o *Sandbox) SetTarget(v string) {
 	o.Target = v
+}
+
+// GetStorageBackend returns the StorageBackend field value
+func (o *Sandbox) GetStorageBackend() SandboxStorageBackend {
+	if o == nil {
+		var ret SandboxStorageBackend
+		return ret
+	}
+
+	return o.StorageBackend
+}
+
+// GetStorageBackendOk returns a tuple with the StorageBackend field value
+// and a boolean to check if the value has been set.
+func (o *Sandbox) GetStorageBackendOk() (*SandboxStorageBackend, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.StorageBackend, true
+}
+
+// SetStorageBackend sets field value
+func (o *Sandbox) SetStorageBackend(v SandboxStorageBackend) {
+	o.StorageBackend = v
 }
 
 // GetCpu returns the Cpu field value
@@ -1170,7 +1197,7 @@ func (o *Sandbox) SetToolboxProxyUrl(v string) {
 }
 
 func (o Sandbox) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -1197,6 +1224,7 @@ func (o Sandbox) ToMap() (map[string]interface{}, error) {
 		toSerialize["domainAllowList"] = o.DomainAllowList
 	}
 	toSerialize["target"] = o.Target
+	toSerialize["storageBackend"] = o.StorageBackend
 	toSerialize["cpu"] = o.Cpu
 	toSerialize["gpu"] = o.Gpu
 	if !IsNil(o.GpuType) {
@@ -1281,6 +1309,7 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 		"public",
 		"networkBlockAll",
 		"target",
+		"storageBackend",
 		"cpu",
 		"gpu",
 		"memory",
@@ -1293,10 +1322,10 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -1327,6 +1356,7 @@ func (o *Sandbox) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "networkAllowList")
 		delete(additionalProperties, "domainAllowList")
 		delete(additionalProperties, "target")
+		delete(additionalProperties, "storageBackend")
 		delete(additionalProperties, "cpu")
 		delete(additionalProperties, "gpu")
 		delete(additionalProperties, "gpuType")
@@ -1392,5 +1422,3 @@ func (v *NullableSandbox) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
-
-

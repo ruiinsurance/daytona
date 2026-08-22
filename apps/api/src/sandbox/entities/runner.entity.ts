@@ -166,6 +166,11 @@ export class Runner {
   @Column({
     default: false,
   })
+  localVolumeEnabled: boolean
+
+  @Column({
+    default: false,
+  })
   draining: boolean
 
   @Column({

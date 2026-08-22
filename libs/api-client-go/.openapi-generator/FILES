@@ -165,6 +165,7 @@ model_sandbox_list_item.go
 model_sandbox_list_sort_direction.go
 model_sandbox_list_sort_field.go
 model_sandbox_state.go
+model_sandbox_storage_backend.go
 model_sandbox_volume.go
 model_screenshot_response.go
 model_search_files_response.go

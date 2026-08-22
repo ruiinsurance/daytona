@@ -1867,6 +1867,12 @@ const docTemplate = `{
                 },
                 "registry": {
                     "$ref": "#/definitions/RegistryDTO"
+                },
+                "volumes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/dto.VolumeDTO"
+                    }
                 }
             }
         },
@@ -2072,6 +2078,9 @@ const docTemplate = `{
         "dto.VolumeDTO": {
             "type": "object",
             "properties": {
+                "backend": {
+                    "type": "string"
+                },
                 "mountPath": {
                     "type": "string"
                 },

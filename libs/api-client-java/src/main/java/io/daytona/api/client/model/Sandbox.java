@@ -23,6 +23,7 @@ import io.daytona.api.client.model.BuildInfo;
 import io.daytona.api.client.model.GpuType;
 import io.daytona.api.client.model.SandboxDesiredState;
 import io.daytona.api.client.model.SandboxState;
+import io.daytona.api.client.model.SandboxStorageBackend;
 import io.daytona.api.client.model.SandboxVolume;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -119,6 +120,11 @@ public class Sandbox {
   @SerializedName(SERIALIZED_NAME_TARGET)
   @javax.annotation.Nonnull
   private String target;
+
+  public static final String SERIALIZED_NAME_STORAGE_BACKEND = "storageBackend";
+  @SerializedName(SERIALIZED_NAME_STORAGE_BACKEND)
+  @javax.annotation.Nonnull
+  private SandboxStorageBackend storageBackend;
 
   public static final String SERIALIZED_NAME_CPU = "cpu";
   @SerializedName(SERIALIZED_NAME_CPU)
@@ -602,6 +608,25 @@ public class Sandbox {
 
   public void setTarget(@javax.annotation.Nonnull String target) {
     this.target = target;
+  }
+
+
+  public Sandbox storageBackend(@javax.annotation.Nonnull SandboxStorageBackend storageBackend) {
+    this.storageBackend = storageBackend;
+    return this;
+  }
+
+  /**
+   * Persisted storage backend for the sandbox
+   * @return storageBackend
+   */
+  @javax.annotation.Nonnull
+  public SandboxStorageBackend getStorageBackend() {
+    return storageBackend;
+  }
+
+  public void setStorageBackend(@javax.annotation.Nonnull SandboxStorageBackend storageBackend) {
+    this.storageBackend = storageBackend;
   }
 
 
@@ -1135,6 +1160,7 @@ public class Sandbox {
         Objects.equals(this.networkAllowList, sandbox.networkAllowList) &&
         Objects.equals(this.domainAllowList, sandbox.domainAllowList) &&
         Objects.equals(this.target, sandbox.target) &&
+        Objects.equals(this.storageBackend, sandbox.storageBackend) &&
         Objects.equals(this.cpu, sandbox.cpu) &&
         Objects.equals(this.gpu, sandbox.gpu) &&
         Objects.equals(this.gpuType, sandbox.gpuType) &&
@@ -1164,7 +1190,7 @@ public class Sandbox {
 
   @Override
   public int hashCode() {
-    return Objects.hash(id, organizationId, name, snapshot, user, env, labels, _public, networkBlockAll, networkAllowList, domainAllowList, target, cpu, gpu, gpuType, memory, disk, state, desiredState, errorReason, recoverable, backupState, backupCreatedAt, autoStopInterval, autoArchiveInterval, autoDeleteInterval, volumes, buildInfo, createdAt, updatedAt, lastActivityAt, sandboxClass, daemonVersion, runnerId, linkedSandboxId, toolboxProxyUrl, additionalProperties);
+    return Objects.hash(id, organizationId, name, snapshot, user, env, labels, _public, networkBlockAll, networkAllowList, domainAllowList, target, storageBackend, cpu, gpu, gpuType, memory, disk, state, desiredState, errorReason, recoverable, backupState, backupCreatedAt, autoStopInterval, autoArchiveInterval, autoDeleteInterval, volumes, buildInfo, createdAt, updatedAt, lastActivityAt, sandboxClass, daemonVersion, runnerId, linkedSandboxId, toolboxProxyUrl, additionalProperties);
   }
 
   @Override
@@ -1183,6 +1209,7 @@ public class Sandbox {
     sb.append("    networkAllowList: ").append(toIndentedString(networkAllowList)).append("\n");
     sb.append("    domainAllowList: ").append(toIndentedString(domainAllowList)).append("\n");
     sb.append("    target: ").append(toIndentedString(target)).append("\n");
+    sb.append("    storageBackend: ").append(toIndentedString(storageBackend)).append("\n");
     sb.append("    cpu: ").append(toIndentedString(cpu)).append("\n");
     sb.append("    gpu: ").append(toIndentedString(gpu)).append("\n");
     sb.append("    gpuType: ").append(toIndentedString(gpuType)).append("\n");
@@ -1226,10 +1253,10 @@ public class Sandbox {
 
   static {
     // a set of all properties/fields (JSON key names)
-    openapiFields = new HashSet<String>(Arrays.asList("id", "organizationId", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "cpu", "gpu", "gpuType", "memory", "disk", "state", "desiredState", "errorReason", "recoverable", "backupState", "backupCreatedAt", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "createdAt", "updatedAt", "lastActivityAt", "sandboxClass", "daemonVersion", "runnerId", "linkedSandboxId", "toolboxProxyUrl"));
+    openapiFields = new HashSet<String>(Arrays.asList("id", "organizationId", "name", "snapshot", "user", "env", "labels", "public", "networkBlockAll", "networkAllowList", "domainAllowList", "target", "storageBackend", "cpu", "gpu", "gpuType", "memory", "disk", "state", "desiredState", "errorReason", "recoverable", "backupState", "backupCreatedAt", "autoStopInterval", "autoArchiveInterval", "autoDeleteInterval", "volumes", "buildInfo", "createdAt", "updatedAt", "lastActivityAt", "sandboxClass", "daemonVersion", "runnerId", "linkedSandboxId", "toolboxProxyUrl"));
 
     // a set of required properties/fields (JSON key names)
-    openapiRequiredFields = new HashSet<String>(Arrays.asList("id", "organizationId", "name", "user", "env", "labels", "public", "networkBlockAll", "target", "cpu", "gpu", "memory", "disk", "toolboxProxyUrl"));
+    openapiRequiredFields = new HashSet<String>(Arrays.asList("id", "organizationId", "name", "user", "env", "labels", "public", "networkBlockAll", "target", "storageBackend", "cpu", "gpu", "memory", "disk", "toolboxProxyUrl"));
   }
 
   /**
@@ -1276,6 +1303,8 @@ public class Sandbox {
       if (!jsonObj.get("target").isJsonPrimitive()) {
         throw new IllegalArgumentException(String.format(java.util.Locale.ROOT, "Expected the field `target` to be a primitive type in the JSON string but got `%s`", jsonObj.get("target").toString()));
       }
+      // validate the required field `storageBackend`
+      SandboxStorageBackend.validateJsonElement(jsonObj.get("storageBackend"));
       // validate the optional field `gpuType`
       if (jsonObj.get("gpuType") != null && !jsonObj.get("gpuType").isJsonNull()) {
         GpuType.validateJsonElement(jsonObj.get("gpuType"));

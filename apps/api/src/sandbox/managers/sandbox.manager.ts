@@ -44,6 +44,8 @@ import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeSandboxError } from '../utils/sanitize-error.util'
 import { isEphemeral } from '../utils/ephemeral.util'
 import { Sandbox } from '../entities/sandbox.entity'
+import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
+import { allowsAutomaticOwnerChange } from '../local-volume/local-volume.contract'
 import { Runner } from '../entities/runner.entity'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
 import { DockerRegistryService } from '../../docker-registry/services/docker-registry.service'
@@ -364,6 +366,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
       where: {
         // Sandboxes without a completed backup are handled by the backup manager.
         runnerId: runner.id,
+        storageBackend: Not(SandboxStorageBackend.LOCAL),
         state: SandboxState.STOPPED,
         desiredState: SandboxDesiredState.STOPPED,
         backupState: BackupState.COMPLETED,
@@ -408,6 +411,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     const sandboxes = await this.sandboxRepository.find({
       where: {
         runnerId,
+        storageBackend: Not(SandboxStorageBackend.LOCAL),
         state: SandboxState.STARTED,
         desiredState: SandboxDesiredState.STARTED,
         pending: false,
@@ -460,6 +464,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
       where: {
         // Sandboxes without a completed backup are handled by the backup manager.
         runnerId,
+        storageBackend: Not(SandboxStorageBackend.LOCAL),
         state: SandboxState.STOPPED,
         desiredState: SandboxDesiredState.STOPPED,
         backupState: BackupState.COMPLETED,
@@ -501,6 +506,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     const erroredSandboxes = await this.sandboxRepository.find({
       where: {
         runnerId,
+        storageBackend: Not(SandboxStorageBackend.LOCAL),
         state: SandboxState.ERROR,
         recoverable: false,
         desiredState: Not(In([SandboxDesiredState.DESTROYED, SandboxDesiredState.ARCHIVED])),
@@ -557,6 +563,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
       where: [
         {
           runnerId,
+          storageBackend: Not(SandboxStorageBackend.LOCAL),
           state: SandboxState.STOPPED,
           recoverable: false,
           desiredState: SandboxDesiredState.STOPPED,
@@ -564,6 +571,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         },
         {
           runnerId,
+          storageBackend: Not(SandboxStorageBackend.LOCAL),
           state: SandboxState.ERROR,
           recoverable: false,
           backupState: In([BackupState.ERROR, BackupState.NONE]),
@@ -607,6 +615,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     const recoverableSandboxes = await this.sandboxRepository.find({
       where: {
         runnerId,
+        storageBackend: Not(SandboxStorageBackend.LOCAL),
         recoverable: true,
         // ERROR forces pending=false via Sandbox invariants, but filter both explicitly to
         // document the intended target set (recoverable errored sandboxes only).
@@ -716,6 +725,9 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
   }
 
   private async migrateSandbox(sandbox: Sandbox, oldRunnerId: string, newRunnerId: string): Promise<void> {
+    if (!allowsAutomaticOwnerChange(sandbox)) {
+      throw new Error(`Local volume sandbox ${sandbox.id} is pinned to runner ${oldRunnerId}`)
+    }
     this.logger.debug(
       `Starting sandbox migration for ${sandbox.id} from runner ${oldRunnerId} to runner ${newRunnerId}`,
     )

@@ -40,6 +40,7 @@ import { DockerRegistry } from '../../docker-registry/entities/docker-registry.e
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { buildRunnerVolumes } from '../local-volume/local-volume.contract'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -216,11 +217,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
           }
         : undefined,
       entrypoint: entrypoint,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: buildRunnerVolumes(sandbox),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
@@ -479,11 +476,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       memoryQuota: sandbox.mem,
       storageQuota: sandbox.disk,
       env: sandbox.env,
-      volumes: sandbox.volumes?.map((volume) => ({
-        volumeId: volume.volumeId,
-        mountPath: volume.mountPath,
-        subpath: volume.subpath,
-      })),
+      volumes: buildRunnerVolumes(sandbox),
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       errorReason: sandbox.errorReason,
@@ -501,16 +494,17 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async resizeSandbox(
-    sandboxId: string,
+    sandbox: Sandbox,
     cpu?: number,
     memory?: number,
     disk?: number,
     registry?: DockerRegistry,
   ): Promise<void> {
-    await this.sandboxApiClient.resize(sandboxId, {
+    await this.sandboxApiClient.resize(sandbox.id, {
       cpu,
       memory,
       disk,
+      volumes: buildRunnerVolumes(sandbox),
       registry: registry
         ? {
             project: registry.project,

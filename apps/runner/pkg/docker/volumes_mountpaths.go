@@ -24,6 +24,7 @@ const volumeMountPrefix = "daytona-volume-"
 const (
 	perVolumeBucketLayout    = "per-volume-bucket"
 	singleBucketPrefixLayout = "single-bucket-prefix"
+	localVolumeBackend       = "local"
 	volumeMountReadyTimeout  = 5 * time.Second
 )
 
@@ -36,6 +37,14 @@ func isValidVolumeId(volumeId string) bool {
 		return false
 	}
 	return parsed.String() == volumeId
+}
+
+func isCanonicalV4UUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	if err != nil {
+		return false
+	}
+	return parsed.String() == value && parsed.Version() == 4
 }
 
 func getVolumeMountBasePath() string {
@@ -74,13 +83,195 @@ func resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSourc
 	return baseMountPath, bindSource, nil
 }
 
+func validateLocalWorkspaceSubpath(subpath *string) error {
+	if subpath == nil || *subpath == "" || filepath.IsAbs(*subpath) {
+		return fmt.Errorf("local volume requires a canonical workspace subpath")
+	}
+	clean := filepath.Clean(*subpath)
+	if clean != *subpath || filepath.Separator != '/' && strings.Contains(*subpath, "/") {
+		return fmt.Errorf("local volume requires a canonical workspace subpath")
+	}
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	if len(parts) != 3 || parts[0] != "sandboxes" || !isCanonicalV4UUID(parts[1]) || parts[2] != "workspace" {
+		return fmt.Errorf("local volume requires subpath sandboxes/<canonical-sandbox-uuid>/workspace")
+	}
+	return nil
+}
+
+func validateLocalVolumePair(volumes []dto.VolumeDTO) error {
+	localVolumes := make([]dto.VolumeDTO, 0, 2)
+	for _, volume := range volumes {
+		if volume.Backend == localVolumeBackend {
+			localVolumes = append(localVolumes, volume)
+		}
+	}
+	if len(localVolumes) == 0 {
+		return nil
+	}
+	if len(localVolumes) != len(volumes) {
+		return fmt.Errorf("local volume backend cannot be mixed with COS volumes")
+	}
+	if len(localVolumes) != 2 {
+		return fmt.Errorf("local volume backend requires explicit /workspace and /config binds")
+	}
+
+	byTarget := make(map[string]dto.VolumeDTO, 2)
+	for _, volume := range localVolumes {
+		if volume.MountPath != "/workspace" && volume.MountPath != "/config" {
+			return fmt.Errorf("local volume backend only supports /workspace and /config targets")
+		}
+		if _, exists := byTarget[volume.MountPath]; exists {
+			return fmt.Errorf("local volume backend has duplicate %s target", volume.MountPath)
+		}
+		if err := validateLocalWorkspaceSubpath(volume.Subpath); err != nil {
+			return err
+		}
+		byTarget[volume.MountPath] = volume
+	}
+
+	workspace, hasWorkspace := byTarget["/workspace"]
+	configVolume, hasConfig := byTarget["/config"]
+	if !hasWorkspace || !hasConfig || workspace.Subpath == nil || configVolume.Subpath == nil ||
+		workspace.VolumeId != configVolume.VolumeId || *workspace.Subpath != *configVolume.Subpath {
+		return fmt.Errorf("/workspace and /config must use the same local source")
+	}
+	return nil
+}
+
+func validateLocalVolumeRoot(configuredRoot string) (string, error) {
+	rootPath := filepath.Clean(configuredRoot)
+	if configuredRoot == "" || !filepath.IsAbs(rootPath) || rootPath != configuredRoot {
+		return "", fmt.Errorf("local volume root must be an absolute canonical path")
+	}
+
+	currentPath := string(filepath.Separator)
+	for _, component := range strings.Split(strings.TrimPrefix(rootPath, string(filepath.Separator)), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		currentPath = filepath.Join(currentPath, component)
+		info, err := os.Lstat(currentPath)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(currentPath, 0o750); err != nil && !os.IsExist(err) {
+				return "", fmt.Errorf("create local volume root component: %w", err)
+			}
+			info, err = os.Lstat(currentPath)
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect local volume root component: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("local volume root must not contain a symbolic link")
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("local volume root component is not a directory")
+		}
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(rootPath)
+	if err != nil || resolvedRoot != rootPath {
+		return "", fmt.Errorf("local volume root must not contain a symbolic link")
+	}
+	return rootPath, nil
+}
+
+func (d *DockerClient) resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
+	switch vol.Backend {
+	case "", "cos":
+		return resolveVolumeMountPaths(vol)
+	case localVolumeBackend:
+		return d.prepareLocalVolumeMountPaths(vol)
+	default:
+		return "", "", fmt.Errorf("unsupported volume backend %q", vol.Backend)
+	}
+}
+
+func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, string, error) {
+	if !d.localVolumeEnabled {
+		return "", "", fmt.Errorf("local volume backend is disabled")
+	}
+	if !isValidVolumeId(vol.VolumeId) {
+		return "", "", fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
+	}
+	if err := validateLocalWorkspaceSubpath(vol.Subpath); err != nil {
+		return "", "", err
+	}
+
+	rootPath, err := validateLocalVolumeRoot(d.localVolumeRoot)
+	if err != nil {
+		return "", "", err
+	}
+
+	relativeSource := filepath.Join(volumeMountPrefix+vol.VolumeId, *vol.Subpath)
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return "", "", fmt.Errorf("open local volume root: %w", err)
+	}
+	defer root.Close()
+	components := strings.Split(filepath.ToSlash(relativeSource), "/")
+	for index := range components {
+		componentPath := filepath.Join(components[:index+1]...)
+		info, err := root.Lstat(componentPath)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("inspect local volume source: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", "", fmt.Errorf("local volume source contains a symbolic link")
+		}
+		if !info.IsDir() {
+			return "", "", fmt.Errorf("local volume source component is not a directory")
+		}
+	}
+	if err := root.MkdirAll(relativeSource, 0o750); err != nil {
+		return "", "", fmt.Errorf("create local volume source: %w", err)
+	}
+	// The sandbox user exists inside the image and cannot be resolved safely on
+	// the Runner host. The UUID-scoped directory is mounted only into its owner
+	// sandbox, so grant the container user write access at the workspace leaf.
+	if err := root.Chmod(relativeSource, 0o777); err != nil {
+		return "", "", fmt.Errorf("make local workspace writable: %w", err)
+	}
+
+	for index := range components {
+		componentPath := filepath.Join(components[:index+1]...)
+		info, err := root.Lstat(componentPath)
+		if err != nil {
+			return "", "", fmt.Errorf("inspect local volume source: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", "", fmt.Errorf("local volume source contains a symbolic link")
+		}
+		if !info.IsDir() {
+			return "", "", fmt.Errorf("local volume source component is not a directory")
+		}
+	}
+
+	baseMountPath := filepath.Join(rootPath, volumeMountPrefix+vol.VolumeId)
+	bindSource := filepath.Join(rootPath, relativeSource)
+	resolvedSource, err := filepath.EvalSymlinks(bindSource)
+	if err != nil || resolvedSource != bindSource {
+		return "", "", fmt.Errorf("local volume source must be canonical and contain no symbolic link")
+	}
+	return baseMountPath, bindSource, nil
+}
+
 func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
+	if err := validateLocalVolumePair(volumes); err != nil {
+		return nil, err
+	}
+
 	// Phase 1: fan out FUSE mounts for unique volumes in parallel. Each
 	// ensureVolumeFuseMounted runs mount-s3 and then waits up to 5s for the
 	// mount to become ready; doing them sequentially made create-time scale
 	// linearly with the number of mounted volumes.
 	uniqueMounts := make(map[string]string, len(volumes)) // volumeIdPrefixed -> baseMountPath
 	for _, vol := range volumes {
+		if vol.Backend == localVolumeBackend {
+			continue
+		}
 		baseMountPath, _, err := resolveVolumeMountPaths(vol)
 		if err != nil {
 			return nil, err
@@ -122,7 +313,7 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 	// kept sequential so the returned slice order matches volumes.
 	volumeMountPathBinds := make([]string, 0, len(volumes))
 	for _, vol := range volumes {
-		_, bindSource, err := resolveVolumeMountPaths(vol)
+		_, bindSource, err := d.resolveVolumeMountPaths(vol)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +322,7 @@ func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []d
 			subpathStr = *vol.Subpath
 		}
 
-		if vol.Subpath != nil && *vol.Subpath != "" {
+		if vol.Backend != localVolumeBackend && vol.Subpath != nil && *vol.Subpath != "" {
 			err := os.MkdirAll(bindSource, 0755)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create subpath directory %s: %s", bindSource, err)
