@@ -36,6 +36,33 @@ export class RedisLockProvider {
     await this.redis.del(key)
   }
 
+  async unlockOwned(key: string, code: LockCode): Promise<boolean> {
+    const removed = await this.redis.eval(
+      `if redis.call('GET', KEYS[1]) == ARGV[1] then
+         return redis.call('DEL', KEYS[1])
+       end
+       return 0`,
+      1,
+      key,
+      code.getCode(),
+    )
+    return Number(removed) === 1
+  }
+
+  async refreshOwned(key: string, ttl: number, code: LockCode): Promise<boolean> {
+    const refreshed = await this.redis.eval(
+      `if redis.call('GET', KEYS[1]) == ARGV[1] then
+         return redis.call('EXPIRE', KEYS[1], ARGV[2])
+       end
+       return 0`,
+      1,
+      key,
+      code.getCode(),
+      ttl,
+    )
+    return Number(refreshed) === 1
+  }
+
   async isLocked(key: string): Promise<boolean> {
     const exists = await this.redis.exists(key)
     return exists === 1

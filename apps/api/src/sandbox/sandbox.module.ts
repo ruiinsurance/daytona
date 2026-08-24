@@ -6,7 +6,10 @@
 import { Module } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { SandboxController } from './controllers/sandbox.controller'
+import { SandboxRebuildController } from './controllers/sandbox-rebuild.controller'
 import { SandboxService } from './services/sandbox.service'
+import { SandboxRebuildService } from './services/sandbox-rebuild.service'
+import { SandboxRebuildOperationStore } from './services/sandbox-rebuild-operation.store'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Sandbox } from './entities/sandbox.entity'
 import { UserModule } from '../user/user.module'
@@ -94,6 +97,7 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
   ],
   controllers: [
     SandboxController,
+    SandboxRebuildController,
     RunnerController,
     ToolboxController,
     SnapshotController,
@@ -103,6 +107,8 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
   ],
   providers: [
     SandboxService,
+    SandboxRebuildService,
+    SandboxRebuildOperationStore,
     SandboxManager,
     BackupManager,
     SandboxWarmPoolService,

@@ -28,6 +28,7 @@ export interface LocalOwnerRunner {
   unschedulable: boolean
   draining: boolean
   localVolumeEnabled: boolean
+  serviceHealth?: RunnerServiceHealthCapability[]
 }
 
 export interface RunnerServiceHealthCapability {
@@ -55,6 +56,13 @@ export function allowsBackupLifecycle(sandbox: Pick<LocalVolumeSandbox, 'storage
 
 export function reportsLocalVolumeCapability(serviceHealth?: RunnerServiceHealthCapability[]): boolean {
   return serviceHealth?.some((service) => service.serviceName === 'local-volume' && service.healthy) ?? false
+}
+
+export function matchesLocalVolumeRequirement(
+  runner: Pick<LocalOwnerRunner, 'localVolumeEnabled' | 'serviceHealth'>,
+  required?: boolean,
+): boolean {
+  return required === undefined || reportsLocalVolumeCapability(runner.serviceHealth) === required
 }
 
 export function buildRunnerVolumes(sandbox: LocalVolumeSandbox): LocalVolumeMount[] {
@@ -107,7 +115,7 @@ export function assertLocalOwnerAvailable(
     runner.state !== RunnerState.READY ||
     runner.unschedulable ||
     runner.draining ||
-    !runner.localVolumeEnabled
+    !reportsLocalVolumeCapability(runner.serviceHealth)
   ) {
     throw new OwnerRunnerUnavailableError(sandbox.runnerId ?? undefined)
   }

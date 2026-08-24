@@ -30,6 +30,7 @@ function ownerRunner(overrides: Partial<Runner> = {}): Runner {
     unschedulable: false,
     draining: false,
     localVolumeEnabled: true,
+    serviceHealth: [{ serviceName: 'local-volume', healthy: true }],
     availabilityScore: 100,
     ...overrides,
   } as Runner

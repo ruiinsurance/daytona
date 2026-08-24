@@ -13,6 +13,7 @@ import {
   allowsAutomaticOwnerChange,
   allowsBackupLifecycle,
   buildRunnerVolumes,
+  matchesLocalVolumeRequirement,
   reportsLocalVolumeCapability,
   shouldClearRunnerOnTerminalState,
   type LocalOwnerRunner,
@@ -40,6 +41,7 @@ function readyOwner(): LocalOwnerRunner {
     unschedulable: false,
     draining: false,
     localVolumeEnabled: true,
+    serviceHealth: [{ serviceName: 'local-volume', healthy: true }],
   }
 }
 
@@ -143,13 +145,48 @@ describe('local volume contract', () => {
     expect(reportsLocalVolumeCapability([{ serviceName: 'local-volume', healthy: true }])).toBe(true)
   })
 
+  it('ignores the legacy local-volume boolean when current health proves the local root', () => {
+    expect(
+      assertLocalOwnerAvailable(localSandbox(), {
+        ...readyOwner(),
+        localVolumeEnabled: false,
+      }),
+    ).toBe(runnerId)
+  })
+
+  it('matches scheduling requirements from current health instead of the legacy boolean', () => {
+    expect(
+      matchesLocalVolumeRequirement(
+        {
+          localVolumeEnabled: false,
+          serviceHealth: [{ serviceName: 'local-volume', healthy: true }],
+        },
+        true,
+      ),
+    ).toBe(true)
+    expect(
+      matchesLocalVolumeRequirement(
+        {
+          localVolumeEnabled: true,
+          serviceHealth: [{ serviceName: 'local-volume', healthy: false }],
+        },
+        true,
+      ),
+    ).toBe(false)
+    expect(matchesLocalVolumeRequirement({ localVolumeEnabled: false }, undefined)).toBe(true)
+  })
+
   it.each([
     ['missing', null],
     ['wrong identity', { ...readyOwner(), id: '55555555-5555-4555-8555-555555555555' }],
     ['offline', { ...readyOwner(), state: RunnerState.UNRESPONSIVE }],
     ['unschedulable', { ...readyOwner(), unschedulable: true }],
     ['draining', { ...readyOwner(), draining: true }],
-    ['without local capability', { ...readyOwner(), localVolumeEnabled: false }],
+    ['without local health report', { ...readyOwner(), serviceHealth: undefined }],
+    [
+      'with unhealthy local root',
+      { ...readyOwner(), serviceHealth: [{ serviceName: 'local-volume', healthy: false }] },
+    ],
   ])('fails closed when the owner is %s', (_name, runner) => {
     expect(() => assertLocalOwnerAvailable(localSandbox(), runner as LocalOwnerRunner | null)).toThrow(
       OwnerRunnerUnavailableError,

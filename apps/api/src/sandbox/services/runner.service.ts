@@ -48,7 +48,7 @@ import Redis from 'ioredis'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { normalizeGpuType } from '../utils/gpu-type-normalizer.util'
-import { reportsLocalVolumeCapability } from '../local-volume/local-volume.contract'
+import { matchesLocalVolumeRequirement, reportsLocalVolumeCapability } from '../local-volume/local-volume.contract'
 import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import { SnapshotRepository } from '../repositories/snapshot.repository'
@@ -306,10 +306,6 @@ export class RunnerService {
         : MoreThanOrEqual(this.configService.getOrThrow('runnerScore.thresholds.availability')),
     }
 
-    if (params.localVolumeEnabled !== undefined) {
-      runnerFilter.localVolumeEnabled = params.localVolumeEnabled
-    }
-
     if (params.gpu > 0) {
       runnerFilter.gpu = MoreThanOrEqual(params.gpu)
       if (typeof params.gpuType === 'string') {
@@ -364,7 +360,10 @@ export class RunnerService {
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    return runners
+      .filter((runner) => matchesLocalVolumeRequirement(runner, params.localVolumeEnabled))
+      .sort((a, b) => b.availabilityScore - a.availabilityScore)
+      .slice(0, 10)
   }
 
   /**

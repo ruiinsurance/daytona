@@ -119,6 +119,7 @@ import {
   allowsAutomaticOwnerChange,
   buildRunnerVolumes,
   isLocalVolumeSandbox,
+  reportsLocalVolumeCapability,
 } from '../local-volume/local-volume.contract'
 import { ListSandboxesResponseDto } from '../dto/list-sandboxes-response.dto'
 import { ListSandboxesQueryDto } from '../dto/list-sandboxes-query.dto'
@@ -573,7 +574,10 @@ export class SandboxService {
         }
 
         this.runnerService.assertRunnerCanHost(runner)
-        if (storageBackend === SandboxStorageBackend.LOCAL && !runner.localVolumeEnabled) {
+        if (
+          storageBackend === SandboxStorageBackend.LOCAL &&
+          !reportsLocalVolumeCapability(runner.serviceHealth ?? undefined)
+        ) {
           throw new BadRequestError('Runner hosting linked sandbox does not support local volumes')
         }
         if (storageBackend === SandboxStorageBackend.LOCAL) {
