@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, HttpCode, HttpException, HttpStatus, Param, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, HttpCode, HttpStatus, Param, Post, Res, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger'
 import { SkipThrottle } from '@nestjs/throttler'
+import type { Response } from 'express'
 import { Audit } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -54,19 +55,18 @@ export class SandboxWorkspaceRecoveryController {
     @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
     @Param('sandboxId') sandboxId: string,
     @Body() input: RecoverSandboxWorkspaceDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.recoveryService.recover(sandboxId, authContext.organizationId, input)
     if (result.outcome === 'recovered') {
       return { success: true as const, code: result.outcome, ...result }
     }
-    throw new HttpException(
-      {
-        success: false,
-        code: result.outcome,
-        retryable: true,
-        ...result,
-      },
-      HttpStatus.CONFLICT,
-    )
+    response.status(HttpStatus.ACCEPTED)
+    return {
+      success: false as const,
+      code: result.outcome,
+      retryable: true as const,
+      ...result,
+    }
   }
 }

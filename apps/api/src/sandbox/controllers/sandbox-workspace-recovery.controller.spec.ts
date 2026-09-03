@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { HttpException, HttpStatus } from '@nestjs/common'
+import { HttpStatus } from '@nestjs/common'
 import { SandboxWorkspaceRecoveryController } from './sandbox-workspace-recovery.controller'
 
 const sandboxId = '11111111-1111-4111-8111-111111111111'
@@ -31,35 +31,29 @@ describe('SandboxWorkspaceRecoveryController', () => {
     }
     const service = { recover: jest.fn().mockResolvedValue(result) }
     const controller = new SandboxWorkspaceRecoveryController(service as never)
+    const response = { status: jest.fn() }
 
-    await expect(controller.recoverWorkspace({ organizationId } as never, sandboxId, request)).resolves.toEqual({
-      success: true,
-      code: 'recovered',
-      ...result,
-    })
+    await expect(
+      controller.recoverWorkspace({ organizationId } as never, sandboxId, request, response as never),
+    ).resolves.toEqual({ success: true, code: 'recovered', ...result })
     expect(service.recover).toHaveBeenCalledWith(sandboxId, organizationId, request)
+    expect(response.status).not.toHaveBeenCalled()
   })
 
-  it('maps a concurrently owned operation to a fixed retryable conflict', async () => {
+  it('returns a concurrently owned operation as a structured retryable accepted response', async () => {
     const result = { outcome: 'operation_in_progress' as const, operationId, sandboxId }
     const service = { recover: jest.fn().mockResolvedValue(result) }
     const controller = new SandboxWorkspaceRecoveryController(service as never)
+    const response = { status: jest.fn() }
 
-    let caught: unknown
-    try {
-      await controller.recoverWorkspace({ organizationId } as never, sandboxId, request)
-    } catch (error) {
-      caught = error
-    }
-
-    expect(caught).toBeInstanceOf(HttpException)
-    const error = caught as HttpException
-    expect(error.getStatus()).toBe(HttpStatus.CONFLICT)
-    expect(error.getResponse()).toEqual({
+    await expect(
+      controller.recoverWorkspace({ organizationId } as never, sandboxId, request, response as never),
+    ).resolves.toEqual({
       success: false,
       code: 'operation_in_progress',
       retryable: true,
       ...result,
     })
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.ACCEPTED)
   })
 })
