@@ -181,6 +181,29 @@ func TestFilesystemDeviceInContainerRootScopesAbsoluteSymlinkToContainerRoot(t *
 	}
 }
 
+func TestFilesystemIdentityInContainerRootScopesAbsoluteSymlinkToContainerRoot(t *testing.T) {
+	containerRoot := t.TempDir()
+	physicalTarget := filepath.Join(containerRoot, "workspace")
+	if err := os.Mkdir(physicalTarget, 0o755); err != nil {
+		t.Fatalf("create container workspace target: %v", err)
+	}
+	if err := os.Symlink("/workspace", filepath.Join(containerRoot, "config")); err != nil {
+		t.Fatalf("create absolute container symlink: %v", err)
+	}
+
+	want, err := getFilesystemIdentity(physicalTarget)
+	if err != nil {
+		t.Fatalf("inspect physical container target: %v", err)
+	}
+	got, err := filesystemIdentityInContainerRoot(containerRoot, "/config")
+	if err != nil {
+		t.Fatalf("inspect absolute symlink identity inside container root: %v", err)
+	}
+	if got != want {
+		t.Fatalf("container-root symlink identity = %#v, want %#v", got, want)
+	}
+}
+
 func TestFilesystemDeviceInContainerRootResolvesRelativeSymlink(t *testing.T) {
 	containerRoot := t.TempDir()
 	physicalTarget := filepath.Join(containerRoot, "workspace")

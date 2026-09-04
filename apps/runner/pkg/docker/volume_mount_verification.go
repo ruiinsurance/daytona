@@ -61,6 +61,10 @@ func getFilesystemIdentity(path string) (filesystemIdentity, error) {
 	if err != nil {
 		return filesystemIdentity{}, err
 	}
+	return filesystemIdentityFromInfo(path, info)
+}
+
+func filesystemIdentityFromInfo(path string, info os.FileInfo) (filesystemIdentity, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return filesystemIdentity{}, fmt.Errorf("filesystem identity is unavailable for %s", path)
@@ -130,9 +134,17 @@ func volumeTargetPath(containerRoot string, mountPath string) (string, error) {
 }
 
 func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (uint64, error) {
+	identity, err := filesystemIdentityInContainerRoot(containerRoot, mountPath)
+	if err != nil {
+		return 0, err
+	}
+	return identity.device, nil
+}
+
+func filesystemIdentityInContainerRoot(containerRoot string, mountPath string) (filesystemIdentity, error) {
 	cleanContainerRoot := filepath.Clean(containerRoot)
 	if _, err := volumeTargetPath(cleanContainerRoot, mountPath); err != nil {
-		return 0, err
+		return filesystemIdentity{}, err
 	}
 
 	remaining := splitContainerPath(filepath.Clean(mountPath))
@@ -156,7 +168,7 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 		candidatePath := filepath.Join(append([]string{cleanContainerRoot}, candidateParts...)...)
 		info, err := os.Lstat(candidatePath)
 		if err != nil {
-			return 0, err
+			return filesystemIdentity{}, err
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
 			resolved = append(resolved, component)
@@ -165,11 +177,11 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 
 		symlinkCount++
 		if symlinkCount > maxContainerTargetSymlinks {
-			return 0, fmt.Errorf("container volume target %q exceeds %d symbolic links", mountPath, maxContainerTargetSymlinks)
+			return filesystemIdentity{}, fmt.Errorf("container volume target %q exceeds %d symbolic links", mountPath, maxContainerTargetSymlinks)
 		}
 		linkTarget, err := os.Readlink(candidatePath)
 		if err != nil {
-			return 0, err
+			return filesystemIdentity{}, err
 		}
 		if filepath.IsAbs(linkTarget) {
 			resolved = resolved[:0]
@@ -178,14 +190,11 @@ func filesystemDeviceInContainerRoot(containerRoot string, mountPath string) (ui
 	}
 
 	targetPath := filepath.Join(append([]string{cleanContainerRoot}, resolved...)...)
-	if len(resolved) == 0 {
-		return filesystemDevice(targetPath)
-	}
 	info, err := os.Lstat(targetPath)
 	if err != nil {
-		return 0, err
+		return filesystemIdentity{}, err
 	}
-	return filesystemDeviceFromInfo(targetPath, info)
+	return filesystemIdentityFromInfo(targetPath, info)
 }
 
 func splitContainerPath(path string) []string {
@@ -245,11 +254,7 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 			if err := validateLocalInspectBind(inspected.Mounts, vol.MountPath, bindSource); err != nil {
 				return err
 			}
-			targetPath, err := containerVolumeTargetPath(inspected.State.Pid, vol.MountPath)
-			if err != nil {
-				return err
-			}
-			identity, err := getFilesystemIdentity(targetPath)
+			identity, err := filesystemIdentityInContainerRoot(containerRoot, vol.MountPath)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return containerVolumeTargetNotVisibleError(vol.MountPath, true, err)
