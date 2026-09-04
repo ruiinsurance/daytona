@@ -6,6 +6,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,6 +84,37 @@ func TestVerifyLocalContainerInspectMountsChecksReplacementBinds(t *testing.T) {
 	inspected.Mounts[1].Source = bindSource + "-other"
 	if err := client.verifyLocalContainerInspectMounts(inspected, volumes); err == nil || !strings.Contains(err.Error(), "expected bind source") {
 		t.Fatalf("verifyLocalContainerInspectMounts() error = %v, want source mismatch", err)
+	}
+}
+
+func TestVerifyContainerVolumeMountDevicesClassifiesMissingContainerTargetAsTransient(t *testing.T) {
+	root := t.TempDir()
+	const sandboxID = "77777777-7777-4777-8777-777777777777"
+	subpath := "sandboxes/" + sandboxID + "/workspace"
+	bindSource := filepath.Join(root, volumeMountPrefix+testVolumeID, filepath.FromSlash(subpath))
+	if err := os.MkdirAll(bindSource, 0o755); err != nil {
+		t.Fatalf("create local test workspace: %v", err)
+	}
+	volumes := []dto.VolumeDTO{
+		{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath, Backend: localVolumeBackend},
+		{VolumeId: testVolumeID, MountPath: "/config", Subpath: &subpath, Backend: localVolumeBackend},
+	}
+	inspected := &container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+		ID: sandboxID,
+		State: &container.State{
+			Running: true,
+			Pid:     99999999,
+		},
+	}}
+	dockerClient := newStartTestDockerClient(nil)
+	dockerClient.localVolumeRoot = root
+
+	err := dockerClient.verifyContainerVolumeMountDevices(context.Background(), inspected, volumes)
+	if !errors.Is(err, errContainerVolumeTargetNotVisible) {
+		t.Fatalf("verifyContainerVolumeMountDevices() error = %v, want transient target visibility classification", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("verifyContainerVolumeMountDevices() error = %v, want wrapped ENOENT", err)
 	}
 }
 

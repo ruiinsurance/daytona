@@ -108,7 +108,7 @@ func newStartTestDockerClient(apiClient client.APIClient) *DockerClient {
 	}
 }
 
-func newVolumeMountStateClient(t *testing.T, sandboxID string, initiallyRunning bool, startCalls, killCalls *atomic.Int32) (*client.Client, *atomic.Bool) {
+func newVolumeMountStateClient(t *testing.T, sandboxID, bindSource string, initiallyRunning bool, inspectCalls, startCalls, killCalls *atomic.Int32) (*client.Client, *atomic.Bool) {
 	t.Helper()
 
 	running := &atomic.Bool{}
@@ -116,6 +116,7 @@ func newVolumeMountStateClient(t *testing.T, sandboxID string, initiallyRunning 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1.51/containers/" + sandboxID + "/json":
+			inspectCalls.Add(1)
 			state := "exited"
 			pid := 0
 			if running.Load() {
@@ -127,8 +128,12 @@ func newVolumeMountStateClient(t *testing.T, sandboxID string, initiallyRunning 
   "Id": %q,
   "State": {"Status": %q, "Running": %t, "Pid": %d, "ExitCode": 0},
   "Config": {"Entrypoint": ["/usr/local/bin/daytona-daemon"], "WorkingDir": ""},
+  "Mounts": [
+    {"Type": "bind", "Source": %q, "Destination": "/workspace"},
+    {"Type": "bind", "Source": %q, "Destination": "/config"}
+  ],
   "NetworkSettings": {"Networks": {}}
-}`, sandboxID, state, running.Load(), pid)
+}`, sandboxID, state, running.Load(), pid, bindSource, bindSource)
 		case "/v1.51/containers/" + sandboxID + "/start":
 			startCalls.Add(1)
 			running.Store(true)
@@ -170,8 +175,19 @@ func prepareResponsiveVolumeMount(t *testing.T) {
 
 func volumeTestMetadata(sandboxID string) map[string]string {
 	return map[string]string{
-		"volumes": `[{"volumeId":"` + testVolumeID + `","mountPath":"/workspace","subpath":"sandboxes/` + sandboxID + `/workspace"}]`,
+		"volumes": `[{"volumeId":"` + testVolumeID + `","mountPath":"/workspace","subpath":"sandboxes/` + sandboxID + `/workspace","backend":"local"},{"volumeId":"` + testVolumeID + `","mountPath":"/config","subpath":"sandboxes/` + sandboxID + `/workspace","backend":"local"}]`,
 	}
+}
+
+func prepareLocalStartVolume(t *testing.T, sandboxID string) (root string, bindSource string) {
+	t.Helper()
+
+	root = t.TempDir()
+	bindSource = filepath.Join(root, volumeMountPrefix+testVolumeID, "sandboxes", sandboxID, "workspace")
+	if err := os.MkdirAll(bindSource, 0o755); err != nil {
+		t.Fatalf("create local test workspace: %v", err)
+	}
+	return root, bindSource
 }
 
 func TestStartFailsClosedWhenVolumeRemountFails(t *testing.T) {
@@ -272,12 +288,13 @@ func TestStartRejectsWrongLocalBindBeforeContainerStart(t *testing.T) {
 func TestStartStopsNewlyStartedContainerWhenVolumeTargetUsesWrongDevice(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)
-	prepareResponsiveVolumeMount(t)
 
-	const sandboxID = "sandbox-new-wrong-volume-device"
-	var startCalls, killCalls, verifyCalls atomic.Int32
-	apiClient, running := newVolumeMountStateClient(t, sandboxID, false, &startCalls, &killCalls)
+	const sandboxID = "33333333-3333-4333-8333-333333333333"
+	root, bindSource := prepareLocalStartVolume(t, sandboxID)
+	var inspectCalls, startCalls, killCalls, verifyCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClient(t, sandboxID, bindSource, false, &inspectCalls, &startCalls, &killCalls)
 	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeRoot = root
 	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
 		verifyCalls.Add(1)
 		return errors.New("workspace device does not match S3 bind source")
@@ -303,15 +320,94 @@ func TestStartStopsNewlyStartedContainerWhenVolumeTargetUsesWrongDevice(t *testi
 	}
 }
 
+func TestStartRetriesTransientPostStartVolumeVisibilityWithoutStoppingContainer(t *testing.T) {
+	requireTestRunnerConfig(t)
+	installMountFailureCommands(t, 0)
+
+	const sandboxID = "44444444-4444-4444-8444-444444444444"
+	root, bindSource := prepareLocalStartVolume(t, sandboxID)
+	var inspectCalls, startCalls, killCalls, verifyCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClient(t, sandboxID, bindSource, false, &inspectCalls, &startCalls, &killCalls)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeRoot = root
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
+		if verifyCalls.Add(1) == 1 {
+			return containerVolumeTargetNotVisibleError("/config", true, os.ErrNotExist)
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err := dockerClient.Start(ctx, sandboxID, nil, volumeTestMetadata(sandboxID))
+	if err == nil || !strings.Contains(err.Error(), "sandbox IP not found") {
+		t.Fatalf("Start() error = %v, want only the expected test-harness IP error", err)
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("ContainerStart calls = %d, want 1", got)
+	}
+	if got := verifyCalls.Load(); got != 2 {
+		t.Fatalf("volume verifier calls = %d, want 2 after transient visibility failure", got)
+	}
+	if got := inspectCalls.Load(); got < 3 {
+		t.Fatalf("ContainerInspect calls = %d, want at least 3 including retry re-inspection", got)
+	}
+	if got := killCalls.Load(); got != 0 {
+		t.Fatalf("ContainerKill calls = %d, want 0 after successful retry", got)
+	}
+	if !running.Load() {
+		t.Fatal("sandbox was stopped after transient volume visibility recovered")
+	}
+}
+
+func TestStartFailsClosedAfterPersistentTransientPostStartVolumeVisibility(t *testing.T) {
+	requireTestRunnerConfig(t)
+	installMountFailureCommands(t, 0)
+
+	const sandboxID = "55555555-5555-4555-8555-555555555555"
+	root, bindSource := prepareLocalStartVolume(t, sandboxID)
+	var inspectCalls, startCalls, killCalls, verifyCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClient(t, sandboxID, bindSource, false, &inspectCalls, &startCalls, &killCalls)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeRoot = root
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
+		verifyCalls.Add(1)
+		return containerVolumeTargetNotVisibleError("/config", true, os.ErrNotExist)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	_, _, err := dockerClient.Start(ctx, sandboxID, nil, volumeTestMetadata(sandboxID))
+	if err == nil || !strings.Contains(err.Error(), "sandbox was force-stopped") {
+		t.Fatalf("Start() error = %v, want a fail-closed container volume mount error", err)
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("ContainerStart calls = %d, want 1", got)
+	}
+	if got := verifyCalls.Load(); got < 2 {
+		t.Fatalf("volume verifier calls = %d, want retries until the context deadline", got)
+	}
+	if got := inspectCalls.Load(); got < 3 {
+		t.Fatalf("ContainerInspect calls = %d, want retry re-inspection", got)
+	}
+	if got := killCalls.Load(); got != 1 {
+		t.Fatalf("ContainerKill calls = %d, want exactly 1 after persistent visibility failure", got)
+	}
+	if running.Load() {
+		t.Fatal("sandbox remained running after persistent volume visibility failure")
+	}
+}
+
 func TestStartStopsAlreadyRunningContainerWhenVolumeTargetUsesWrongDevice(t *testing.T) {
 	requireTestRunnerConfig(t)
 	installMountFailureCommands(t, 0)
-	prepareResponsiveVolumeMount(t)
 
-	const sandboxID = "sandbox-running-wrong-volume-device"
-	var startCalls, killCalls, verifyCalls atomic.Int32
-	apiClient, running := newVolumeMountStateClient(t, sandboxID, true, &startCalls, &killCalls)
+	const sandboxID = "66666666-6666-4666-8666-666666666666"
+	root, bindSource := prepareLocalStartVolume(t, sandboxID)
+	var inspectCalls, startCalls, killCalls, verifyCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClient(t, sandboxID, bindSource, true, &inspectCalls, &startCalls, &killCalls)
 	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeRoot = root
 	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
 		verifyCalls.Add(1)
 		return errors.New("workspace device does not match S3 bind source")

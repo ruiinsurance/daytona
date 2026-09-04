@@ -5,6 +5,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,7 +20,19 @@ import (
 )
 
 const unsafeVolumeStopTimeout = 15 * time.Second
+const postStartVolumeMountVerificationTimeout = 2 * time.Second
+const postStartVolumeMountVerificationRetryInterval = 25 * time.Millisecond
 const maxContainerTargetSymlinks = 40
+
+var errContainerVolumeTargetNotVisible = errors.New("container volume target is not yet visible")
+
+func containerVolumeTargetNotVisibleError(mountPath string, local bool, err error) error {
+	target := "container volume target"
+	if local {
+		target = "container local volume target"
+	}
+	return fmt.Errorf("%w: inspect %s %s: %w", errContainerVolumeTargetNotVisible, target, mountPath, err)
+}
 
 func filesystemDevice(path string) (uint64, error) {
 	info, err := os.Stat(path)
@@ -207,6 +220,9 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 		containerRoot := filepath.Join("/proc", strconv.Itoa(inspected.State.Pid), "root")
 		containerTargetDevice, err := filesystemDeviceInContainerRoot(containerRoot, vol.MountPath)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return containerVolumeTargetNotVisibleError(vol.MountPath, false, err)
+			}
 			return fmt.Errorf("inspect container volume target %s: %w", vol.MountPath, err)
 		}
 		baseDeviceAfter, err := filesystemDevice(baseMountPath)
@@ -234,6 +250,9 @@ func (d *DockerClient) verifyContainerVolumeMountDevices(_ context.Context, insp
 			}
 			identity, err := getFilesystemIdentity(targetPath)
 			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return containerVolumeTargetNotVisibleError(vol.MountPath, true, err)
+				}
 				return fmt.Errorf("inspect container local volume target %s: %w", vol.MountPath, err)
 			}
 			localTargetIdentities[vol.MountPath] = identity
@@ -259,6 +278,41 @@ func (d *DockerClient) verifyContainerVolumeMounts(ctx context.Context, inspecte
 		return d.containerVolumeMountVerifier(ctx, inspected, volumes)
 	}
 	return d.verifyContainerVolumeMountDevices(ctx, inspected, volumes)
+}
+
+func (d *DockerClient) verifyStartedContainerVolumeMounts(ctx context.Context, containerId string, inspected *container.InspectResponse, volumes []dto.VolumeDTO) (*container.InspectResponse, error) {
+	if len(volumes) == 0 {
+		return inspected, nil
+	}
+
+	verificationCtx, cancel := context.WithTimeout(ctx, postStartVolumeMountVerificationTimeout)
+	defer cancel()
+
+	current := inspected
+	retryTicker := time.NewTicker(postStartVolumeMountVerificationRetryInterval)
+	defer retryTicker.Stop()
+
+	for {
+		verificationErr := d.verifyContainerVolumeMounts(verificationCtx, current, volumes)
+		if verificationErr == nil {
+			return current, nil
+		}
+		if !errors.Is(verificationErr, errContainerVolumeTargetNotVisible) {
+			return current, verificationErr
+		}
+
+		select {
+		case <-verificationCtx.Done():
+			return current, fmt.Errorf("post-start container volume mount verification did not stabilize: %w", verificationErr)
+		case <-retryTicker.C:
+		}
+
+		reinspected, err := d.ContainerInspect(verificationCtx, containerId)
+		if err != nil {
+			return current, fmt.Errorf("reinspect container after transient volume target visibility failure: %w", err)
+		}
+		current = reinspected
+	}
 }
 
 func (d *DockerClient) waitForContainerStopped(ctx context.Context, containerId string) error {

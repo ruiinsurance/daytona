@@ -87,7 +87,8 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	if err != nil {
 		return nil, "", err
 	}
-	if err := d.verifyContainerVolumeMounts(ctx, runningContainer, volumes); err != nil {
+	runningContainer, err = d.verifyStartedContainerVolumeMounts(ctx, containerId, runningContainer, volumes)
+	if err != nil {
 		return nil, "", d.failClosedContainerVolumeMount(ctx, runningContainer, err)
 	}
 
