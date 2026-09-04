@@ -24,6 +24,12 @@ export interface JobTypeMap {
   [JobType.DESTROY_SANDBOX]: {
     resourceType: [ResourceType.SANDBOX]
   }
+  [JobType.DESTROY_SANDBOX_WORKSPACE]: {
+    resourceType: [ResourceType.SANDBOX]
+  }
+  [JobType.RECOVER_SANDBOX_WORKSPACE]: {
+    resourceType: [ResourceType.SANDBOX]
+  }
   [JobType.RESIZE_SANDBOX]: {
     resourceType: [ResourceType.SANDBOX]
   }

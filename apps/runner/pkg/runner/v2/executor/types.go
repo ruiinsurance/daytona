@@ -18,3 +18,18 @@ type SnapshotSandboxPayload struct {
 	OrganizationId string           `json:"organizationId"`
 	Registry       *dto.RegistryDTO `json:"registry,omitempty"`
 }
+
+type DestroySandboxWorkspacePayload struct {
+	OperationID   string `json:"operationId"`
+	OwnerRunnerID string `json:"ownerRunnerId"`
+	VolumeID      string `json:"volumeId"`
+	Subpath       string `json:"subpath"`
+}
+
+type RecoverSandboxWorkspacePayload struct {
+	OperationID           string               `json:"operationId"`
+	OwnerRunnerID         string               `json:"ownerRunnerId"`
+	OriginalVolumeID      string               `json:"originalVolumeId"`
+	OriginalVolumeSubpath string               `json:"originalVolumeSubpath"`
+	Sandbox               dto.CreateSandboxDTO `json:"sandbox"`
+}

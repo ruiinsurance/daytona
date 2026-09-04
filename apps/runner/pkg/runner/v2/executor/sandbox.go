@@ -12,6 +12,7 @@ import (
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/daytonaio/runner/pkg/common"
+	"github.com/google/uuid"
 )
 
 func (e *Executor) createSandbox(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -75,6 +76,67 @@ func (e *Executor) destroySandbox(ctx context.Context, job *apiclient.Job) (any,
 	common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusSuccess)).Inc()
 
 	return nil, nil
+}
+
+func (e *Executor) destroySandboxWorkspace(ctx context.Context, job *apiclient.Job) (any, error) {
+	var payload DestroySandboxWorkspacePayload
+	if err := e.parsePayload(job.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if !canonicalV4UUID(payload.OperationID) || !canonicalV4UUID(payload.OwnerRunnerID) {
+		return nil, fmt.Errorf("invalid workspace destruction identity")
+	}
+
+	outcome, err := e.docker.DestroyLocalWorkspace(
+		ctx,
+		job.GetResourceId(),
+		payload.VolumeID,
+		payload.Subpath,
+	)
+	if err != nil {
+		return nil, common.FormatRecoverableError(err)
+	}
+	return map[string]string{
+		"operationId":   payload.OperationID,
+		"sandboxId":     job.GetResourceId(),
+		"ownerRunnerId": payload.OwnerRunnerID,
+		"volumeId":      payload.VolumeID,
+		"subpath":       payload.Subpath,
+		"outcome":       string(outcome),
+	}, nil
+}
+
+func (e *Executor) recoverSandboxWorkspace(ctx context.Context, job *apiclient.Job) (any, error) {
+	var payload RecoverSandboxWorkspacePayload
+	if err := e.parsePayload(job.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if !canonicalV4UUID(payload.OperationID) || !canonicalV4UUID(payload.OwnerRunnerID) ||
+		payload.Sandbox.Id != job.GetResourceId() {
+		return nil, fmt.Errorf("invalid workspace recovery identity")
+	}
+
+	_, daemonVersion, err := e.docker.RecoverLocalWorkspace(
+		ctx,
+		payload.Sandbox,
+		payload.OriginalVolumeID,
+		payload.OriginalVolumeSubpath,
+	)
+	if err != nil {
+		return nil, common.FormatRecoverableError(err)
+	}
+	return map[string]any{
+		"operationId":   payload.OperationID,
+		"sandboxId":     job.GetResourceId(),
+		"ownerRunnerId": payload.OwnerRunnerID,
+		"status":        "running",
+		"daemonVersion": daemonVersion,
+	}, nil
+}
+
+func canonicalV4UUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed.String() == value && parsed.Version() == 4
 }
 
 func (e *Executor) updateNetworkSettings(ctx context.Context, job *apiclient.Job) (any, error) {

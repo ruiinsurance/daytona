@@ -11,7 +11,7 @@ import { VolumeState } from '../enums/volume-state.enum'
 import { CreateVolumeDto } from '../dto/create-volume.dto'
 import { v4 as uuidv4 } from 'uuid'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
-import { isValidUuid } from '../../common/utils/uuid'
+import { isCanonicalV4Uuid, isValidUuid } from '../../common/utils/uuid'
 import { Organization } from '../../organization/entities/organization.entity'
 import { OnEvent } from '@nestjs/event-emitter'
 import { SandboxEvents } from '../constants/sandbox-events.constants'
@@ -123,6 +123,47 @@ export class VolumeService {
       await this.rollbackPendingUsage(organization.id, pendingVolumeCountIncrement)
       throw error
     }
+  }
+
+  async registerRestoredLocalVolume(volumeId: string, organizationId: string): Promise<Volume> {
+    if (!isCanonicalV4Uuid(volumeId) || !isCanonicalV4Uuid(organizationId)) {
+      throw new BadRequestError('Invalid restored local Volume identity')
+    }
+
+    const existing = await this.volumeRepository.findOne({ where: { id: volumeId } })
+    if (existing) {
+      return this.assertRestoredLocalVolume(existing, organizationId)
+    }
+
+    const volume = new Volume()
+    volume.id = volumeId
+    volume.name = volumeId
+    volume.organizationId = organizationId
+    volume.state = VolumeState.READY
+
+    try {
+      await this.volumeRepository.insert(volume)
+      return volume
+    } catch (error) {
+      if ((error as { code?: string }).code !== '23505') throw error
+      const concurrent = await this.volumeRepository.findOne({ where: { id: volumeId } })
+      if (!concurrent) {
+        throw new ConflictException('Restored local Volume registration conflicts with an existing Volume')
+      }
+      return this.assertRestoredLocalVolume(concurrent, organizationId)
+    }
+  }
+
+  private assertRestoredLocalVolume(volume: Volume, organizationId: string): Volume {
+    if (
+      volume.organizationId !== organizationId ||
+      volume.state !== VolumeState.READY ||
+      typeof volume.name !== 'string' ||
+      volume.name.length === 0
+    ) {
+      throw new ConflictException('Restored local Volume identity conflicts with an existing Volume')
+    }
+    return volume
   }
 
   async delete(volumeId: string): Promise<void> {

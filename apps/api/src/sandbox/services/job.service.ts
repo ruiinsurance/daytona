@@ -58,6 +58,7 @@ export class JobService {
     resourceType: ResourceTypeForJobType<T>,
     resourceId: string,
     payload?: string | Record<string, any>,
+    jobId?: string,
   ): Promise<Job> {
     // Use provided manager if available, otherwise use default repository
     const repo = manager ? manager.getRepository(Job) : this.jobRepository
@@ -69,6 +70,7 @@ export class JobService {
 
     try {
       const job = new Job({
+        id: jobId,
         type,
         runnerId,
         resourceType,
