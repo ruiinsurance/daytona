@@ -109,6 +109,10 @@ func newStartTestDockerClient(apiClient client.APIClient) *DockerClient {
 }
 
 func newVolumeMountStateClient(t *testing.T, sandboxID, bindSource string, initiallyRunning bool, inspectCalls, startCalls, killCalls *atomic.Int32) (*client.Client, *atomic.Bool) {
+	return newVolumeMountStateClientWithInspectDelay(t, sandboxID, bindSource, initiallyRunning, inspectCalls, startCalls, killCalls, nil)
+}
+
+func newVolumeMountStateClientWithInspectDelay(t *testing.T, sandboxID, bindSource string, initiallyRunning bool, inspectCalls, startCalls, killCalls *atomic.Int32, inspectDelay func(int32) time.Duration) (*client.Client, *atomic.Bool) {
 	t.Helper()
 
 	running := &atomic.Bool{}
@@ -116,7 +120,10 @@ func newVolumeMountStateClient(t *testing.T, sandboxID, bindSource string, initi
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1.51/containers/" + sandboxID + "/json":
-			inspectCalls.Add(1)
+			call := inspectCalls.Add(1)
+			if inspectDelay != nil {
+				time.Sleep(inspectDelay(call))
+			}
 			state := "exited"
 			pid := 0
 			if running.Load() {
@@ -357,6 +364,57 @@ func TestStartRetriesTransientPostStartVolumeVisibilityWithoutStoppingContainer(
 	}
 	if !running.Load() {
 		t.Fatal("sandbox was stopped after transient volume visibility recovered")
+	}
+}
+
+func TestStartRetriesTransientPostStartVolumeVisibilityAfterSlowReinspect(t *testing.T) {
+	requireTestRunnerConfig(t)
+	installMountFailureCommands(t, 0)
+
+	const sandboxID = "88888888-8888-4888-8888-888888888888"
+	root, bindSource := prepareLocalStartVolume(t, sandboxID)
+	var inspectCalls, startCalls, killCalls, verifyCalls atomic.Int32
+	apiClient, running := newVolumeMountStateClientWithInspectDelay(
+		t,
+		sandboxID,
+		bindSource,
+		false,
+		&inspectCalls,
+		&startCalls,
+		&killCalls,
+		func(call int32) time.Duration {
+			if call == 3 {
+				return 2*time.Second + 100*time.Millisecond
+			}
+			return 0
+		},
+	)
+	dockerClient := newStartTestDockerClient(apiClient)
+	dockerClient.localVolumeRoot = root
+	dockerClient.containerVolumeMountVerifier = func(context.Context, *container.InspectResponse, []dto.VolumeDTO) error {
+		if verifyCalls.Add(1) == 1 {
+			return containerVolumeTargetNotVisibleError("/config", true, os.ErrNotExist)
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	_, _, err := dockerClient.Start(ctx, sandboxID, nil, volumeTestMetadata(sandboxID))
+	if err == nil || !strings.Contains(err.Error(), "sandbox IP not found") {
+		t.Fatalf("Start() error = %v, want only the expected test-harness IP error", err)
+	}
+	if got := startCalls.Load(); got != 1 {
+		t.Fatalf("ContainerStart calls = %d, want 1", got)
+	}
+	if got := verifyCalls.Load(); got != 2 {
+		t.Fatalf("volume verifier calls = %d, want 2 after the slow re-inspection recovered", got)
+	}
+	if got := killCalls.Load(); got != 0 {
+		t.Fatalf("ContainerKill calls = %d, want 0 after the slow re-inspection recovered", got)
+	}
+	if !running.Load() {
+		t.Fatal("sandbox was stopped after a recoverable slow re-inspection")
 	}
 }
 

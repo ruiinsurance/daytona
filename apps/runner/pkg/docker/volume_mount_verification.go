@@ -20,7 +20,8 @@ import (
 )
 
 const unsafeVolumeStopTimeout = 15 * time.Second
-const postStartVolumeMountVerificationTimeout = 2 * time.Second
+const postStartVolumeMountVerificationTimeout = 15 * time.Second
+const postStartVolumeMountInspectTimeout = 2 * time.Second
 const postStartVolumeMountVerificationRetryInterval = 25 * time.Millisecond
 const maxContainerTargetSymlinks = 40
 
@@ -301,17 +302,27 @@ func (d *DockerClient) verifyStartedContainerVolumeMounts(ctx context.Context, c
 			return current, verificationErr
 		}
 
-		select {
-		case <-verificationCtx.Done():
-			return current, fmt.Errorf("post-start container volume mount verification did not stabilize: %w", verificationErr)
-		case <-retryTicker.C:
-		}
+		for {
+			select {
+			case <-verificationCtx.Done():
+				return current, fmt.Errorf("post-start container volume mount verification did not stabilize: %w", verificationErr)
+			case <-retryTicker.C:
+			}
 
-		reinspected, err := d.ContainerInspect(verificationCtx, containerId)
-		if err != nil {
-			return current, fmt.Errorf("reinspect container after transient volume target visibility failure: %w", err)
+			inspectCtx, inspectCancel := context.WithTimeout(verificationCtx, postStartVolumeMountInspectTimeout)
+			reinspected, err := d.ContainerInspect(inspectCtx, containerId)
+			inspectCancel()
+			if err == nil {
+				current = reinspected
+				break
+			}
+			if verificationCtx.Err() != nil {
+				return current, fmt.Errorf("post-start container volume mount verification did not stabilize: %w", verificationErr)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return current, fmt.Errorf("reinspect container after transient volume target visibility failure: %w", err)
+			}
 		}
-		current = reinspected
 	}
 }
 
