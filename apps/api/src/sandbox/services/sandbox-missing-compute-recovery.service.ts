@@ -416,8 +416,15 @@ function assertExactPersistedIdentity(
 ): void {
   assertLocalStorageBackend(sandbox)
   const allowedStates = allowTransitional
-    ? [SandboxState.STARTED, SandboxState.STOPPED, SandboxState.ARCHIVED, SandboxState.CREATING, SandboxState.STARTING]
-    : [SandboxState.STARTED, SandboxState.STOPPED, SandboxState.ARCHIVED]
+    ? [
+        SandboxState.STARTED,
+        SandboxState.STOPPED,
+        SandboxState.ARCHIVED,
+        SandboxState.ERROR,
+        SandboxState.CREATING,
+        SandboxState.STARTING,
+      ]
+    : [SandboxState.STARTED, SandboxState.STOPPED, SandboxState.ARCHIVED, SandboxState.ERROR]
   if (!allowedStates.includes(sandbox.state) || sandbox.pending || !hasExactPersistedIdentity(sandbox, request)) {
     throw identityConflict()
   }

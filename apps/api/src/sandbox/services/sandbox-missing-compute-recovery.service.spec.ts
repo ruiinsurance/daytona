@@ -256,6 +256,62 @@ describe('SandboxMissingComputeRecoveryService', () => {
     )
   })
 
+  it('recovers missing compute after an ordinary start leaves the exact sandbox in error', async () => {
+    const harness = createHarness({ volumeName: 'suna-user-data-v190' })
+    Object.assign(harness.row, {
+      state: SandboxState.ERROR,
+      desiredState: SandboxDesiredState.STARTED,
+      pending: false,
+      errorReason: 'sandbox container not found',
+      recoverable: false,
+    })
+
+    await expect(harness.service.recover(sandboxId, organizationId, input())).resolves.toEqual(
+      expect.objectContaining({
+        outcome: 'recovered',
+        sandboxId,
+        ownerRunnerId,
+        computeCreated: true,
+        workspace: input().workspace,
+      }),
+    )
+    expect(harness.runnerAdapter.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ id: sandboxId, runnerId: ownerRunnerId }),
+      expect.any(String),
+      undefined,
+      expect.any(Array),
+      expect.any(Object),
+      expect.any(String),
+      undefined,
+      { requireExistingLocalWorkspace: true },
+    )
+    expect(harness.row).toMatchObject({
+      state: SandboxState.STARTED,
+      desiredState: SandboxDesiredState.STARTED,
+      pending: false,
+      errorReason: null,
+      recoverable: false,
+    })
+  })
+
+  it('does not recreate compute when an errored container still exists on the owner Runner', async () => {
+    const harness = createHarness({
+      volumeName: 'suna-user-data-v190',
+      sandboxInfo: jest.fn().mockResolvedValue({ state: SandboxState.ERROR }),
+    })
+    Object.assign(harness.row, {
+      state: SandboxState.ERROR,
+      desiredState: SandboxDesiredState.STARTED,
+      pending: false,
+      errorReason: 'existing container failed',
+    })
+
+    await expect(harness.service.recover(sandboxId, organizationId, input())).rejects.toBeInstanceOf(ConflictException)
+    expect(harness.runnerAdapter.createSandbox).not.toHaveBeenCalled()
+    expect(harness.runnerAdapter.startSandbox).not.toHaveBeenCalled()
+    expect(harness.operationStore.complete).not.toHaveBeenCalled()
+  })
+
   it('replays a completed operation without database, Runner, or lock side effects', async () => {
     const harness = createHarness({ completed: true })
 
