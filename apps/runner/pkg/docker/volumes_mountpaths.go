@@ -5,6 +5,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,8 @@ const (
 	localVolumeBackend       = "local"
 	volumeMountReadyTimeout  = 5 * time.Second
 )
+
+var ErrRequiredLocalWorkspaceMissing = errors.New("LOCAL_WORKSPACE_MISSING: required local workspace is missing")
 
 // volumeId becomes part of the host mount path and the S3 bucket name, so require
 // the canonical lowercase UUID form (rejects braced/URN/dashless/uppercase variants,
@@ -175,13 +178,22 @@ func validateLocalVolumeRoot(configuredRoot string) (string, error) {
 func (d *DockerClient) resolveVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
 	switch vol.Backend {
 	case localVolumeBackend:
-		return d.prepareLocalVolumeMountPaths(vol)
+		return d.prepareLocalVolumeMountPaths(vol, false)
 	default:
 		return "", "", fmt.Errorf("runner only supports local volumes, got backend %q", vol.Backend)
 	}
 }
 
-func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, string, error) {
+func (d *DockerClient) resolveExistingLocalVolumeMountPaths(vol dto.VolumeDTO) (baseMountPath string, bindSource string, err error) {
+	switch vol.Backend {
+	case localVolumeBackend:
+		return d.prepareLocalVolumeMountPaths(vol, true)
+	default:
+		return "", "", fmt.Errorf("runner only supports local volumes, got backend %q", vol.Backend)
+	}
+}
+
+func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO, requireExisting bool) (string, string, error) {
 	if !isValidVolumeId(vol.VolumeId) {
 		return "", "", fmt.Errorf("invalid volumeId %q: must be a volume UUID", vol.VolumeId)
 	}
@@ -201,10 +213,12 @@ func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, 
 	}
 	defer root.Close()
 	components := strings.Split(filepath.ToSlash(relativeSource), "/")
+	missing := false
 	for index := range components {
 		componentPath := filepath.Join(components[:index+1]...)
 		info, err := root.Lstat(componentPath)
 		if os.IsNotExist(err) {
+			missing = true
 			break
 		}
 		if err != nil {
@@ -217,14 +231,20 @@ func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, 
 			return "", "", fmt.Errorf("local volume source component is not a directory")
 		}
 	}
-	if err := root.MkdirAll(relativeSource, 0o750); err != nil {
-		return "", "", fmt.Errorf("create local volume source: %w", err)
-	}
-	// The sandbox user exists inside the image and cannot be resolved safely on
-	// the Runner host. The UUID-scoped directory is mounted only into its owner
-	// sandbox, so grant the container user write access at the workspace leaf.
-	if err := root.Chmod(relativeSource, 0o777); err != nil {
-		return "", "", fmt.Errorf("make local workspace writable: %w", err)
+	if requireExisting {
+		if missing {
+			return "", "", fmt.Errorf("%w: volumeId=%s subpath=%s", ErrRequiredLocalWorkspaceMissing, vol.VolumeId, *vol.Subpath)
+		}
+	} else {
+		if err := root.MkdirAll(relativeSource, 0o750); err != nil {
+			return "", "", fmt.Errorf("create local volume source: %w", err)
+		}
+		// The sandbox user exists inside the image and cannot be resolved safely on
+		// the Runner host. The UUID-scoped directory is mounted only into its owner
+		// sandbox, so grant the container user write access at the workspace leaf.
+		if err := root.Chmod(relativeSource, 0o777); err != nil {
+			return "", "", fmt.Errorf("make local workspace writable: %w", err)
+		}
 	}
 
 	for index := range components {
@@ -251,13 +271,27 @@ func (d *DockerClient) prepareLocalVolumeMountPaths(vol dto.VolumeDTO) (string, 
 }
 
 func (d *DockerClient) getVolumesMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
+	return d.getVolumeMountPathBinds(ctx, volumes, false)
+}
+
+func (d *DockerClient) getExistingLocalVolumeMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO) ([]string, error) {
+	return d.getVolumeMountPathBinds(ctx, volumes, true)
+}
+
+func (d *DockerClient) getVolumeMountPathBinds(ctx context.Context, volumes []dto.VolumeDTO, requireExisting bool) ([]string, error) {
 	if err := validateLocalVolumePair(volumes); err != nil {
 		return nil, err
 	}
 
 	volumeMountPathBinds := make([]string, 0, len(volumes))
 	for _, vol := range volumes {
-		_, bindSource, err := d.resolveVolumeMountPaths(vol)
+		var bindSource string
+		var err error
+		if requireExisting {
+			_, bindSource, err = d.resolveExistingLocalVolumeMountPaths(vol)
+		} else {
+			_, bindSource, err = d.resolveVolumeMountPaths(vol)
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -9,6 +9,7 @@ import { SandboxController } from './controllers/sandbox.controller'
 import { SandboxRebuildController } from './controllers/sandbox-rebuild.controller'
 import { SandboxWorkspaceDestructionController } from './controllers/sandbox-workspace-destruction.controller'
 import { SandboxWorkspaceRecoveryController } from './controllers/sandbox-workspace-recovery.controller'
+import { SandboxMissingComputeRecoveryController } from './controllers/sandbox-missing-compute-recovery.controller'
 import { SandboxService } from './services/sandbox.service'
 import { SandboxRebuildService } from './services/sandbox-rebuild.service'
 import { SandboxRebuildOperationStore } from './services/sandbox-rebuild-operation.store'
@@ -16,6 +17,8 @@ import { SandboxWorkspaceDestructionOperationStore } from './services/sandbox-wo
 import { SandboxWorkspaceDestructionService } from './services/sandbox-workspace-destruction.service'
 import { SandboxWorkspaceRecoveryOperationStore } from './services/sandbox-workspace-recovery-operation.store'
 import { SandboxWorkspaceRecoveryService } from './services/sandbox-workspace-recovery.service'
+import { SandboxMissingComputeRecoveryOperationStore } from './services/sandbox-missing-compute-recovery-operation.store'
+import { SandboxMissingComputeRecoveryService } from './services/sandbox-missing-compute-recovery.service'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Sandbox } from './entities/sandbox.entity'
 import { UserModule } from '../user/user.module'
@@ -106,6 +109,7 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
     SandboxRebuildController,
     SandboxWorkspaceDestructionController,
     SandboxWorkspaceRecoveryController,
+    SandboxMissingComputeRecoveryController,
     RunnerController,
     ToolboxController,
     SnapshotController,
@@ -121,6 +125,8 @@ import { SandboxSearchAdapterProvider } from './providers/sandbox-search.provide
     SandboxWorkspaceDestructionOperationStore,
     SandboxWorkspaceRecoveryService,
     SandboxWorkspaceRecoveryOperationStore,
+    SandboxMissingComputeRecoveryService,
+    SandboxMissingComputeRecoveryOperationStore,
     SandboxManager,
     BackupManager,
     SandboxWarmPoolService,
