@@ -93,6 +93,7 @@ function createHarness(
     completed?: boolean
     ownerApiVersion?: '0' | '2'
     v2WorkspaceMissing?: boolean
+    volumeName?: string
   } = {},
 ) {
   const row = sandbox()
@@ -148,7 +149,12 @@ function createHarness(
     findOne: jest.fn(async (entity: unknown) => {
       if (entity === Sandbox) return row
       if (entity === Volume) {
-        return { id: volumeId, organizationId, name: volumeId, state: VolumeState.READY }
+        return {
+          id: volumeId,
+          organizationId,
+          name: options.volumeName ?? volumeId,
+          state: VolumeState.READY,
+        }
       }
       return null
     }),
@@ -224,6 +230,30 @@ describe('SandboxMissingComputeRecoveryService', () => {
     expect(harness.row.state).toBe(SandboxState.STARTED)
     expect(harness.row.desiredState).toBe(SandboxDesiredState.STARTED)
     expect(harness.row.pending).toBe(false)
+  })
+
+  it('accepts the exact original shared local Volume when its display name differs from its UUID', async () => {
+    const harness = createHarness({ volumeName: 'suna-user-data-v190' })
+
+    await expect(harness.service.recover(sandboxId, organizationId, input())).resolves.toEqual(
+      expect.objectContaining({
+        outcome: 'recovered',
+        sandboxId,
+        ownerRunnerId,
+        computeCreated: true,
+        workspace: input().workspace,
+      }),
+    )
+    expect(harness.runnerAdapter.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ id: sandboxId, runnerId: ownerRunnerId }),
+      expect.any(String),
+      undefined,
+      expect.any(Array),
+      expect.any(Object),
+      expect.any(String),
+      undefined,
+      { requireExistingLocalWorkspace: true },
+    )
   })
 
   it('replays a completed operation without database, Runner, or lock side effects', async () => {

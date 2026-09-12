@@ -449,12 +449,7 @@ function assertRequestedOwnerAvailable(owner: Runner | null, ownerRunnerId: stri
 }
 
 function isExactRegisteredVolume(volume: Volume, organizationId: string, volumeId: string): boolean {
-  return (
-    volume.id === volumeId &&
-    volume.organizationId === organizationId &&
-    volume.name === volumeId &&
-    volume.state === VolumeState.READY
-  )
+  return volume.id === volumeId && volume.organizationId === organizationId && volume.state === VolumeState.READY
 }
 
 function isNotFound(error: unknown): boolean {
