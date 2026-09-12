@@ -196,6 +196,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
     skipStart?: boolean,
+    options?: { requireExistingLocalWorkspace?: boolean },
   ): Promise<StartSandboxResponse | undefined> {
     const createSandboxDto: CreateSandboxDTO = {
       id: sandbox.id,
@@ -225,6 +226,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       authToken: sandbox.authToken,
       otelEndpoint,
       skipStart: skipStart,
+      requireExistingLocalWorkspace: options?.requireExistingLocalWorkspace,
       organizationId: sandbox.organizationId,
       regionId: sandbox.region,
       linkedSandboxId: sandbox.linkedSandboxId ?? undefined,

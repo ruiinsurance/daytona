@@ -169,6 +169,59 @@ func TestLocalVolumeBindsUseCanonicalSameSourceWithoutMountS3(t *testing.T) {
 	}
 }
 
+func TestExistingLocalVolumeBindsRequireWorkspaceWithoutCreatingIt(t *testing.T) {
+	root := t.TempDir()
+	client := newStartTestDockerClient(nil)
+	client.localVolumeRoot = root
+	sandboxID := "11111111-1111-4111-8111-111111111111"
+	subpath := "sandboxes/" + sandboxID + "/workspace"
+	workspacePath := filepath.Join(root, volumeMountPrefix+testVolumeID, filepath.FromSlash(subpath))
+	volumes := []dto.VolumeDTO{
+		{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath, Backend: localVolumeBackend},
+		{VolumeId: testVolumeID, MountPath: "/config", Subpath: &subpath, Backend: localVolumeBackend},
+	}
+
+	binds, err := client.getExistingLocalVolumeMountPathBinds(context.Background(), volumes)
+	if err == nil || !strings.Contains(err.Error(), "required local workspace is missing") {
+		t.Fatalf("getExistingLocalVolumeMountPathBinds() = %#v, %v; want typed missing-workspace error", binds, err)
+	}
+	if _, statErr := os.Lstat(workspacePath); !os.IsNotExist(statErr) {
+		t.Fatalf("missing workspace was mutated: %v", statErr)
+	}
+}
+
+func TestExistingLocalVolumeBindsPreserveWorkspaceMode(t *testing.T) {
+	root := t.TempDir()
+	client := newStartTestDockerClient(nil)
+	client.localVolumeRoot = root
+	sandboxID := "11111111-1111-4111-8111-111111111111"
+	subpath := "sandboxes/" + sandboxID + "/workspace"
+	workspacePath := filepath.Join(root, volumeMountPrefix+testVolumeID, filepath.FromSlash(subpath))
+	if err := os.MkdirAll(workspacePath, 0o750); err != nil {
+		t.Fatalf("create existing workspace: %v", err)
+	}
+	volumes := []dto.VolumeDTO{
+		{VolumeId: testVolumeID, MountPath: "/workspace", Subpath: &subpath, Backend: localVolumeBackend},
+		{VolumeId: testVolumeID, MountPath: "/config", Subpath: &subpath, Backend: localVolumeBackend},
+	}
+
+	binds, err := client.getExistingLocalVolumeMountPathBinds(context.Background(), volumes)
+	if err != nil {
+		t.Fatalf("getExistingLocalVolumeMountPathBinds() error = %v", err)
+	}
+	want := []string{workspacePath + "/:/workspace/", workspacePath + "/:/config/"}
+	if !reflect.DeepEqual(binds, want) {
+		t.Fatalf("existing local binds = %#v, want %#v", binds, want)
+	}
+	info, err := os.Stat(workspacePath)
+	if err != nil {
+		t.Fatalf("stat existing workspace: %v", err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Fatalf("existing workspace mode changed to %v; want 0750", info.Mode().Perm())
+	}
+}
+
 func TestValidateLocalWorkspaceSubpathRejectsNonCanonicalPaths(t *testing.T) {
 	tests := []string{
 		"../sandboxes/11111111-1111-4111-8111-111111111111/workspace",

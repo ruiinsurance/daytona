@@ -129,6 +129,14 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return "", "", err
 	}
 
+	var volumeMountPathBinds []string
+	if sandboxDto.RequireExistingLocalWorkspace != nil && *sandboxDto.RequireExistingLocalWorkspace {
+		volumeMountPathBinds, err = d.getExistingLocalVolumeMountPathBinds(ctx, sandboxDto.Volumes)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
 	image, err := d.PullImage(ctx, sandboxDto.Snapshot, sandboxDto.Registry, &sandboxDto.Id)
 	if err != nil {
 		return "", "", err
@@ -140,9 +148,11 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return "", "", err
 	}
 
-	volumeMountPathBinds, err := d.getVolumesMountPathBinds(ctx, sandboxDto.Volumes)
-	if err != nil {
-		return "", "", err
+	if volumeMountPathBinds == nil {
+		volumeMountPathBinds, err = d.getVolumesMountPathBinds(ctx, sandboxDto.Volumes)
+		if err != nil {
+			return "", "", err
+		}
 	}
 
 	// Pin GPU sandboxes to a single physical card. The allocator mutex must

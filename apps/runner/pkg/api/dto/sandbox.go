@@ -28,6 +28,9 @@ type CreateSandboxDTO struct {
 	AuthToken        *string           `json:"authToken,omitempty"`
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
+	// RequireExistingLocalWorkspace makes create fail before image/container
+	// mutation unless the exact local Volume subpath already exists.
+	RequireExistingLocalWorkspace *bool `json:"requireExistingLocalWorkspace,omitempty"`
 
 	// Optional for backward compatibility, but when provided, indicates the class of sandbox to create.
 	SandboxClass *string `json:"sandboxClass,omitempty"`
