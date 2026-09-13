@@ -48,6 +48,10 @@ export interface CreateSandboxDTO {
     'osUser': string;
     'otelEndpoint'?: string;
     'regionId'?: string;
+    /**
+     * Fail closed unless the exact Runner-local workspace already exists.
+     */
+    'requireExistingLocalWorkspace'?: boolean;
     'registry'?: RegistryDTO;
     /**
      * Optional for backward compatibility, but when provided, indicates the class of sandbox to create.
@@ -59,4 +63,3 @@ export interface CreateSandboxDTO {
     'userId': string;
     'volumes'?: Array<DtoVolumeDTO>;
 }
-

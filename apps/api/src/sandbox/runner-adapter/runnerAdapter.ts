@@ -18,6 +18,7 @@ import { RunnerServiceInfo } from '../common/runner-service-info'
 
 export interface RunnerSandboxInfo {
   state: SandboxState
+  errorCode?: 'LOCAL_WORKSPACE_MISSING'
   daemonVersion?: string
   backupState?: BackupState
   backupSnapshot?: string
@@ -86,6 +87,7 @@ export interface RunnerAdapter {
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
     skipStart?: boolean,
+    options?: { requireExistingLocalWorkspace?: boolean },
   ): Promise<StartSandboxResponse | undefined>
   startSandbox(
     sandboxId: string,

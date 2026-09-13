@@ -95,6 +95,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     })
 
     let state = sandbox.state
+    let observedJob: Job | null = incompleteJob
 
     let daemonVersion: string | undefined = undefined
 
@@ -112,6 +113,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
         order: { createdAt: 'DESC' },
       })
       if (latestJob) {
+        observedJob = latestJob
         state = this.inferStateFromJob(latestJob, sandbox)
         daemonVersion = latestJob.getResultMetadata()?.daemonVersion
       }
@@ -119,6 +121,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
     return {
       state,
+      ...(observedJob?.status === JobStatus.FAILED && observedJob.errorMessage?.includes('LOCAL_WORKSPACE_MISSING')
+        ? { errorCode: 'LOCAL_WORKSPACE_MISSING' as const }
+        : {}),
       backupState: sandbox.backupState,
       backupErrorReason: sandbox.backupErrorReason,
       recoverable: sandbox.recoverable,
@@ -132,6 +137,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       case JobType.CREATE_SANDBOX:
         if (job.status === JobStatus.COMPLETED) {
           return SandboxState.STARTED
+        }
+        if (job.status === JobStatus.FAILED) {
+          return SandboxState.ERROR
         }
         if (sandbox.state === SandboxState.RESTORING) {
           return SandboxState.RESTORING
@@ -157,6 +165,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     metadata?: { [key: string]: string },
     otelEndpoint?: string,
     skipStart?: boolean,
+    options?: { requireExistingLocalWorkspace?: boolean },
   ): Promise<StartSandboxResponse | undefined> {
     const payload: CreateSandboxDTO = {
       id: sandbox.id,
@@ -186,6 +195,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       authToken: sandbox.authToken,
       otelEndpoint: otelEndpoint,
       skipStart: skipStart,
+      requireExistingLocalWorkspace: options?.requireExistingLocalWorkspace,
       organizationId: sandbox.organizationId,
       regionId: sandbox.region,
       linkedSandboxId: sandbox.linkedSandboxId ?? undefined,

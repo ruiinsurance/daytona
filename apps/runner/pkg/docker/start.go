@@ -41,7 +41,7 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 			return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
 		}
 		if len(volumes) > 0 {
-			if _, err = d.getVolumesMountPathBinds(ctx, volumes); err != nil {
+			if _, err = d.getExistingLocalVolumeMountPathBinds(ctx, volumes); err != nil {
 				volumeErr := fmt.Errorf("failed to ensure volume FUSE mounts: %w", err)
 				return nil, "", d.failClosedContainerVolumeMount(ctx, c, volumeErr)
 			}

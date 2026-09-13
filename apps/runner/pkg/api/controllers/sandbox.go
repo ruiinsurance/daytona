@@ -10,6 +10,7 @@ import (
 
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/daytonaio/runner/pkg/common"
+	"github.com/daytonaio/runner/pkg/docker"
 	"github.com/daytonaio/runner/pkg/models/enums"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -52,6 +53,14 @@ func Create(ctx *gin.Context) {
 	_, daemonVersion, err := runner.Docker.Create(ctx.Request.Context(), createSandboxDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("create", string(common.PrometheusOperationStatusFailure)).Inc()
+		if errors.Is(err, docker.ErrRequiredLocalWorkspaceMissing) {
+			ctx.Error(common_errors.NewCustomError(
+				http.StatusConflict,
+				"The required Runner-local workspace is missing",
+				"LOCAL_WORKSPACE_MISSING",
+			))
+			return
+		}
 		ctx.Error(err)
 		return
 	}
@@ -358,6 +367,14 @@ func Start(ctx *gin.Context) {
 
 	_, daemonVersion, err := runner.Docker.Start(ctx.Request.Context(), sandboxId, authToken, metadata)
 	if err != nil {
+		if errors.Is(err, docker.ErrRequiredLocalWorkspaceMissing) {
+			ctx.Error(common_errors.NewCustomError(
+				http.StatusConflict,
+				"The required Runner-local workspace is missing",
+				"LOCAL_WORKSPACE_MISSING",
+			))
+			return
+		}
 		ctx.Error(err)
 		return
 	}
