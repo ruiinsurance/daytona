@@ -18,7 +18,7 @@ import { RunnerState } from '../enums/runner-state.enum'
 import { SnapshotRunnerState } from '../enums/snapshot-runner-state.enum'
 import { v4 as uuidv4 } from 'uuid'
 import { RunnerNotReadyError } from '../errors/runner-not-ready.error'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { BuildInfo } from '../entities/build-info.entity'
 import { fromAxiosError } from '../../common/utils/from-axios-error'
@@ -64,6 +64,7 @@ const DONT_SYNC_AGAIN = 'dont-sync-again'
 const DEFAULT_SNAPSHOT_DEACTIVATION_TIMEOUT_MINUTES = 14 * 24 * 60 // 14 days
 type SyncState = typeof SYNC_AGAIN | typeof DONT_SYNC_AGAIN
 const BASE_PROPAGATION_FACTOR = 1 / 3
+const MAX_PROPAGATION_BATCH_SIZE = 10
 
 @Injectable()
 export class SnapshotManager implements TrackableJobExecutions, OnApplicationShutdown {
@@ -106,6 +107,10 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
   @LogExecution('scale-down-runner-snapshots')
   @WithInstrumentation()
   async scaleDownRunnerSnapshots() {
+    if (this.configService.get('snapshotFullCoverage')) {
+      return
+    }
+
     const lockKey = 'scale-down-runner-snapshots-lock'
     const lockTtl = 3 * 60 // seconds (3 min)
     if (!(await this.redisLockProvider.lock(lockKey, lockTtl))) {
@@ -342,6 +347,7 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
         where: {
           state: RunnerState.READY,
           unschedulable: Not(true),
+          draining: Not(true),
           region: In([...sharedRegionIds, ...organizationRegionIds]),
           gpu: snapshot.gpu > 0 ? MoreThanOrEqual(snapshot.gpu) : Or(IsNull(), Equal(0)),
           gpuType: snapshot.gpuType ? snapshot.gpuType : IsNull(),
@@ -360,7 +366,12 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       const sharedSnapshotRunners = await this.snapshotRunnerRepository.find({
         where: {
           snapshotRef: snapshot.ref,
-          state: In([SnapshotRunnerState.READY, SnapshotRunnerState.PULLING_SNAPSHOT]),
+          state: In([
+            SnapshotRunnerState.READY,
+            SnapshotRunnerState.PULLING_SNAPSHOT,
+            SnapshotRunnerState.BUILDING_SNAPSHOT,
+            SnapshotRunnerState.REMOVING,
+          ]),
           runnerId: In(sharedRunnerIds),
         },
       })
@@ -371,7 +382,12 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       const organizationSnapshotRunners = await this.snapshotRunnerRepository.find({
         where: {
           snapshotRef: snapshot.ref,
-          state: In([SnapshotRunnerState.READY, SnapshotRunnerState.PULLING_SNAPSHOT]),
+          state: In([
+            SnapshotRunnerState.READY,
+            SnapshotRunnerState.PULLING_SNAPSHOT,
+            SnapshotRunnerState.BUILDING_SNAPSHOT,
+            SnapshotRunnerState.REMOVING,
+          ]),
           runnerId: In(organizationRunnerIds),
         },
       })
@@ -393,9 +409,10 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       runnersToPropagateTo.push(...unallocatedOrganizationRunners)
 
       // respect the propagation limit for shared runners
+      const propagationFactor = this.configService.get('snapshotFullCoverage') ? 1 : BASE_PROPAGATION_FACTOR
       const sharedRunnersPropagateLimit = Math.max(
         0,
-        Math.ceil(sharedRunners.length * BASE_PROPAGATION_FACTOR) - sharedSnapshotRunnersDistinctRunnersIds.size,
+        Math.ceil(sharedRunners.length * propagationFactor) - sharedSnapshotRunnersDistinctRunnersIds.size,
       )
       runnersToPropagateTo.push(...shuffleArray(unallocatedSharedRunners).slice(0, sharedRunnersPropagateLimit))
 
@@ -417,39 +434,16 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       }
 
       const results = await Promise.allSettled(
-        runnersToPropagateTo.map(async (runner) => {
-          const internalRegistry = internalRegistriesMap.get(runner.region)
-          if (registryBased && !internalRegistry) {
-            throw new Error(`No internal registry found for snapshot ${snapshot.ref} in region ${runner.region}`)
-          }
-
-          const snapshotRunner = await this.runnerService.getSnapshotRunner(runner.id, snapshot.ref)
-
-          try {
-            if (!snapshotRunner) {
-              await this.runnerService.createSnapshotRunnerEntry(
-                runner.id,
-                snapshot.ref,
-                SnapshotRunnerState.PULLING_SNAPSHOT,
-              )
-              await this.pullSnapshotRunner(
-                runner,
-                snapshot.ref,
-                internalRegistry,
-                undefined,
-                undefined,
-                snapshot.sandboxClass,
-              )
-            } else if (snapshotRunner.state === SnapshotRunnerState.PULLING_SNAPSHOT) {
-              await this.handleSnapshotRunnerStatePullingSnapshot(snapshotRunner, runner)
+        shuffleArray(runnersToPropagateTo)
+          .slice(0, MAX_PROPAGATION_BATCH_SIZE)
+          .map(async (runner) => {
+            const internalRegistry = internalRegistriesMap.get(runner.region)
+            if (registryBased && !internalRegistry) {
+              throw new Error(`No internal registry found for snapshot ${snapshot.ref} in region ${runner.region}`)
             }
-          } catch (err) {
-            this.logger.error(`Error propagating snapshot to runner ${runner.id}: ${fromAxiosError(err)}`)
-            snapshotRunner.state = SnapshotRunnerState.ERROR
-            snapshotRunner.errorReason = err.message
-            await this.snapshotRunnerRepository.update(snapshotRunner.id, snapshotRunner)
-          }
-        }),
+
+            await this.propagateSnapshotToRunner(snapshot, runner, internalRegistry)
+          }),
       )
 
       results.forEach((result) => {
@@ -462,11 +456,68 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
     }
   }
 
+  private async propagateSnapshotToRunner(snapshot: Snapshot, runner: Runner, registry?: DockerRegistry) {
+    const lockKey = `propagate-snapshot:${runner.id}:${snapshot.ref}`
+    const lockCode = new LockCode(uuidv4())
+    if (!(await this.redisLockProvider.lock(lockKey, 60, lockCode))) {
+      return
+    }
+
+    try {
+      if (
+        !(await this.snapshotRepository.exists({
+          where: { id: snapshot.id, ref: snapshot.ref, state: SnapshotState.ACTIVE },
+        }))
+      ) {
+        return
+      }
+
+      const snapshotRunner = await this.runnerService.getSnapshotRunner(runner.id, snapshot.ref)
+      if (snapshotRunner) {
+        if (
+          snapshotRunner.state !== SnapshotRunnerState.ERROR ||
+          Date.now() - snapshotRunner.updatedAt.getTime() < 60 * 1000
+        ) {
+          return
+        }
+        const result = await this.snapshotRunnerRepository.update(
+          { id: snapshotRunner.id, state: SnapshotRunnerState.ERROR },
+          { state: SnapshotRunnerState.PULLING_SNAPSHOT, errorReason: null, createdAt: new Date() },
+        )
+        if (!result.affected) {
+          return
+        }
+      } else {
+        await this.runnerService.createSnapshotRunnerEntry(
+          runner.id,
+          snapshot.ref,
+          SnapshotRunnerState.PULLING_SNAPSHOT,
+        )
+      }
+
+      try {
+        await this.pullSnapshotRunner(runner, snapshot.ref, registry, undefined, undefined, snapshot.sandboxClass)
+      } catch (error) {
+        this.logger.error(`Error propagating snapshot to runner ${runner.id}: ${fromAxiosError(error)}`)
+        await this.snapshotRunnerRepository.update(
+          { runnerId: runner.id, snapshotRef: snapshot.ref, state: SnapshotRunnerState.PULLING_SNAPSHOT },
+          { state: SnapshotRunnerState.ERROR, errorReason: error.message },
+        )
+      }
+    } finally {
+      await this.redisLockProvider.unlockOwned(lockKey, lockCode)
+    }
+  }
+
   async scaleDownSnapshotFromRunners(
     snapshot: Snapshot,
     sharedRegionIds: string[],
     propagationFactor: number = BASE_PROPAGATION_FACTOR,
   ): Promise<number> {
+    if (this.configService.get('snapshotFullCoverage')) {
+      return 0
+    }
+
     try {
       if (sharedRegionIds.length === 0) {
         return 0
@@ -1335,6 +1386,9 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
         .andWhere(`bi.lastUsedAt < now() - ${stalenessInterval}`)
         .andWhere(`sr.updatedAt < now() - ${stalenessInterval}`)
         .andWhere("sr.snapshotRef LIKE 'daytona-%'")
+        .andWhere('NOT EXISTS (SELECT 1 FROM snapshot s WHERE s."ref" = sr."snapshotRef" AND s.state = :activeState)', {
+          activeState: SnapshotState.ACTIVE,
+        })
         .limit(500)
         .getMany()
 
@@ -1416,7 +1470,13 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       }
 
       // Get internal names of deactivated snapshots
-      const refs = deactivatedSnapshots.map((snapshot) => snapshot.ref).filter((name) => name) // Filter out null/undefined values
+      const refs: string[] = []
+      for (const ref of new Set(deactivatedSnapshots.map((snapshot) => snapshot.ref).filter(Boolean))) {
+        const activeAliases = await this.snapshotRepository.count({ where: { ref, state: SnapshotState.ACTIVE } })
+        if (activeAliases === 0) {
+          refs.push(ref)
+        }
+      }
 
       if (refs.length > 0) {
         // Set associated SnapshotRunner records to REMOVING state
