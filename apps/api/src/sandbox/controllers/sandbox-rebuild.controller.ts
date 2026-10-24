@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, HttpCode, HttpException, HttpStatus, Param, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger'
 import { SkipThrottle } from '@nestjs/throttler'
 import { Audit } from '../../audit/decorators/audit.decorator'
@@ -32,6 +32,54 @@ import { LocalSandboxRebuildResult, SandboxRebuildService } from '../services/sa
 @UseGuards(AuthenticatedRateLimitGuard)
 export class SandboxRebuildController {
   constructor(private readonly sandboxRebuildService: SandboxRebuildService) {}
+
+  @Get(':sandboxId/rebuild-eligibility')
+  @UseGuards(OrganizationAuthContextGuard, SandboxAccessGuard)
+  @ApiOperation({ summary: 'Inspect update eligibility without changing compute', operationId: 'getRebuildEligibility' })
+  async getRebuildEligibility(
+    @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
+    @Param('sandboxId') sandboxId: string,
+  ) {
+    return this.sandboxRebuildService.getEligibility(sandboxId, authContext.organizationId)
+  }
+
+  @Get(':sandboxId/rebuild/:operationId')
+  @ApiOperation({
+    summary: 'Read retained rebuild operation evidence without replaying mutation',
+    operationId: 'getRebuildOperation',
+  })
+  @ApiParam({ name: 'sandboxId', type: 'string' })
+  @ApiParam({ name: 'operationId', type: 'string' })
+  @UseGuards(OrganizationAuthContextGuard, SandboxAccessGuard)
+  async getRebuildOperation(
+    @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
+    @Param('sandboxId') sandboxId: string,
+    @Param('operationId') operationId: string,
+  ) {
+    return this.sandboxRebuildService.getOperation(sandboxId, authContext.organizationId, operationId)
+  }
+
+  @Post(':sandboxId/rebuild/:operationId/reconcile')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(OrganizationAuthContextGuard, SandboxAccessGuard)
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @ApiOperation({
+    summary: 'Fence an expired preflight without replaying compute mutation',
+    operationId: 'reconcileRebuildPreparation',
+  })
+  async reconcileRebuildPreparation(
+    @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
+    @Param('sandboxId') sandboxId: string,
+    @Param('operationId') operationId: string,
+    @Body() input: { targetSnapshot: string },
+  ) {
+    return this.sandboxRebuildService.reconcilePreparation(
+      sandboxId,
+      authContext.organizationId,
+      operationId,
+      input.targetSnapshot,
+    )
+  }
 
   @Post(':sandboxId/rebuild')
   @HttpCode(HttpStatus.OK)

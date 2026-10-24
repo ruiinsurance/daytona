@@ -1,0 +1,70 @@
+name: Issue 732 rebuild safety checks
+
+on:
+  pull_request:
+    paths:
+      - 'apps/api/src/sandbox/**'
+      - 'apps/runner/**'
+      - '.github/workflows/issue732-rebuild-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue732-rebuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd 'redis-cli ping'
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      NX_DAEMON: 'false'
+      NX_NO_CLOUD: 'true'
+      REBUILD_PROTOCOL_REDIS_TEST: '1'
+      REBUILD_PROTOCOL_REDIS_URL: redis://127.0.0.1:6379/15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - name: API typecheck
+        run: yarn tsc --noEmit -p apps/api/tsconfig.app.json
+      - name: Provider lifecycle and real Redis regressions
+        run: |
+          yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath \
+            apps/api/src/sandbox/services/sandbox-rebuild.service.spec.ts \
+            apps/api/src/sandbox/services/sandbox-rebuild-admission.spec.ts \
+            apps/api/src/sandbox/services/job-state-handler.rebuild.spec.ts \
+            apps/api/src/sandbox/services/sandbox-rebuild-operation.protocol.spec.ts \
+            apps/api/src/sandbox/services/sandbox-rebuild-operation.view.spec.ts \
+            apps/api/src/sandbox/controllers/sandbox-rebuild.controller.spec.ts \
+            apps/api/src/sandbox/runner-adapter/runnerAdapter.v2.rebuild.spec.ts \
+            apps/api/src/sandbox/runner-adapter/runnerAdapter.v2.missing-compute.spec.ts
+      - name: API build
+        run: yarn nx build api --configuration=production --skipNxCache
+
+  runner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: '**/go.sum'
+      - name: Runner compile and read-only inspection regressions
+        working-directory: apps/runner
+        run: go test ./pkg/docker ./pkg/api/controllers ./pkg/api -run 'TestRebuildInspect' -count=1

@@ -77,3 +77,14 @@ describe('SandboxRebuildController', () => {
     })
   })
 })
+
+it('reads operation evidence with tenant scope and never calls rebuild', async () => {
+  const view = { sandboxId, operationId, targetSnapshot: 'target', status: 'running' }
+  const service = { getOperation: jest.fn().mockResolvedValue(view), rebuild: jest.fn() }
+  const controller = new SandboxRebuildController(service as never)
+  await expect(controller.getRebuildOperation({ organizationId } as never, sandboxId, operationId)).resolves.toEqual(
+    view,
+  )
+  expect(service.getOperation).toHaveBeenCalledWith(sandboxId, organizationId, operationId)
+  expect(service.rebuild).not.toHaveBeenCalled()
+})

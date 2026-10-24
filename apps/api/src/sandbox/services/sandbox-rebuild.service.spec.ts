@@ -54,11 +54,36 @@ function emptyOperationStore() {
   return {
     get: jest.fn().mockResolvedValue(null),
     begin: jest.fn().mockResolvedValue(true),
+    beginMutation: jest.fn().mockResolvedValue(true),
     complete: jest.fn().mockResolvedValue(undefined),
   }
 }
 
 describe('SandboxRebuildService', () => {
+  it('does not create/start or publish after control-plane destroy intent appears between generations', async () => {
+    const sandbox = localSandbox()
+    const repository = { findOneOrFail: jest.fn(async () => sandbox), updateWhere: jest.fn() }
+    const owner = { id: ownerRunnerId, region: 'local', apiVersion: '0', state: RunnerState.READY,
+      localVolumeEnabled: true, draining: false, unschedulable: false,
+      serviceHealth: [{ serviceName: 'local-volume', healthy: true }] }
+    const adapter = { startSandbox: jest.fn(async () => undefined), snapshotExists: jest.fn(async () => true),
+      destroySandbox: jest.fn(async () => { sandbox.desiredState = SandboxDesiredState.DESTROYED }),
+      createSandbox: jest.fn() }
+    const store = emptyOperationStore()
+    const service = new SandboxRebuildService(repository as never,
+      { findOne: async () => owner } as never, { create: async () => adapter } as never,
+      { getSnapshotByName: async (name: string) => ({ name, ref: name, sandboxClass: SandboxClass.CONTAINER }) } as never,
+      { findInternalRegistryBySnapshotRef: async () => undefined } as never,
+      { findOne: async () => ({ sandboxMetadata: {} }) } as never, {} as never, { get: () => '' } as never,
+      { lock: async () => true, refreshOwned: async () => true, unlockOwned: async () => true } as never,
+      store as never)
+    await expect(service.rebuild(sandboxId, organizationId, { operationId, targetSnapshot: 'target' })).rejects.toThrow()
+    expect(adapter.destroySandbox).toHaveBeenCalledTimes(1)
+    expect(adapter.createSandbox).not.toHaveBeenCalled()
+    expect(adapter.startSandbox).toHaveBeenCalledTimes(1) // Only initial verification.
+    expect(repository.updateWhere).not.toHaveBeenCalled()
+    expect(store.complete).not.toHaveBeenCalled()
+  })
   it('rejects an unavailable owner before any Runner or snapshot mutation', async () => {
     const sandbox = localSandbox()
     const sandboxRepository = {
@@ -235,7 +260,9 @@ describe('SandboxRebuildService', () => {
     expect(runnerAdapter.startSandbox).toHaveBeenCalledTimes(1)
     expect(runnerAdapter.destroySandbox).not.toHaveBeenCalled()
     expect(runnerAdapter.createSandbox).not.toHaveBeenCalled()
-    expect(operationStore.begin).not.toHaveBeenCalled()
+    expect(operationStore.begin).toHaveBeenCalledTimes(1)
+    expect(operationStore.beginMutation).not.toHaveBeenCalled()
+    expect(operationStore.complete).toHaveBeenCalledWith(sandboxId, operationId, 'target-snapshot', result)
     expect(JSON.stringify(result)).not.toContain('provider detail')
   })
 
@@ -400,6 +427,7 @@ describe('SandboxRebuildService', () => {
     const operationStore = {
       get: jest.fn().mockResolvedValue(null),
       begin: jest.fn().mockResolvedValue(true),
+      beginMutation: jest.fn().mockResolvedValue(true),
       complete: jest.fn().mockRejectedValue(recordingError),
     }
     const service = new SandboxRebuildService(

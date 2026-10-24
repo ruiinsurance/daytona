@@ -72,6 +72,7 @@ export interface StartSandboxResponse {
 }
 
 export interface RunnerAdapter {
+  setRebuildOperation?(operationId: string, assertOwned: () => Promise<void>): void
   init(runner: Runner): Promise<void>
 
   healthCheck(signal?: AbortSignal): Promise<void>

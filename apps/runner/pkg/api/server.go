@@ -135,6 +135,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	{
 		sandboxController.POST("", controllers.Create)
 		sandboxController.GET("/:sandboxId", controllers.Info)
+		sandboxController.POST("/:sandboxId/rebuild-inspect", controllers.InspectRebuildWorkspace)
 		sandboxController.POST("/:sandboxId/destroy", controllers.Destroy)
 		sandboxController.POST("/:sandboxId/start", controllers.Start)
 		sandboxController.POST("/:sandboxId/stop", controllers.Stop)

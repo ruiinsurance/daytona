@@ -18,10 +18,31 @@ import { SandboxPublicStatusUpdatedEvent } from '../events/sandbox-public-status
 import { SandboxOrganizationUpdatedEvent } from '../events/sandbox-organization-updated.event'
 import { SandboxLookupCacheInvalidationService } from '../services/sandbox-lookup-cache-invalidation.service'
 import { SandboxFork } from '../entities/sandbox-fork.entity'
+import { Job } from '../entities/job.entity'
+import { IsNull } from 'typeorm'
+import { ResourceType } from '../enums/resource-type.enum'
+import { SandboxState } from '../enums/sandbox-state.enum'
+import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 
 @Injectable()
 export class SandboxRepository extends BaseRepository<Sandbox> {
   private readonly logger = new Logger(SandboxRepository.name)
+
+  async hasIncompleteLifecycleJobs(sandboxId: string): Promise<boolean> {
+    return this.dataSource.getRepository(Job).exists({
+      where: { resourceId: sandboxId, resourceType: ResourceType.SANDBOX, completedAt: IsNull() },
+    })
+  }
+
+  async withRebuildDispatch<T>(sandboxId: string, runnerId: string, action: (manager: EntityManager) => Promise<T>): Promise<T> {
+    return this.dataSource.transaction(async manager => {
+      const sandbox = await manager.findOne(Sandbox, { where: { id: sandboxId }, lock: { mode: 'pessimistic_write' } })
+      if (!sandbox || sandbox.runnerId !== runnerId || sandbox.state !== SandboxState.STARTED
+        || sandbox.desiredState !== SandboxDesiredState.STARTED || sandbox.pending) throw new SandboxConflictError()
+      // Intent writers cannot change this row between validation and job insert.
+      return action(manager)
+    })
+  }
 
   constructor(
     @InjectDataSource() dataSource: DataSource,
