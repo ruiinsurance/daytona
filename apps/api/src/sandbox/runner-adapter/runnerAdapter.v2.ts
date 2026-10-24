@@ -54,6 +54,28 @@ import { buildRunnerVolumes } from '../local-volume/local-volume.contract'
 export class RunnerAdapterV2 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV2.name)
   protected runner: Runner
+  private rebuildOperationId?: string
+  private rebuildJobId?: string
+  private assertRebuildOwned?: () => Promise<void>
+
+  setRebuildOperation(operationId: string, assertOwned: () => Promise<void>): void {
+    this.rebuildOperationId = operationId
+    this.rebuildJobId = undefined
+    this.assertRebuildOwned = assertOwned
+  }
+
+  private async createLifecycleJob(type: JobType.CREATE_SANDBOX | JobType.START_SANDBOX | JobType.DESTROY_SANDBOX, sandboxId: string, payload?: Record<string, unknown>): Promise<void> {
+    const enqueue = (manager: import('typeorm').EntityManager | null) => this.jobService.createJob(
+      manager, type, this.runner.id, ResourceType.SANDBOX, sandboxId,
+      this.rebuildOperationId ? { ...payload, kortixRebuildOperationId: this.rebuildOperationId } : payload,
+    )
+    if (!this.rebuildOperationId) { await enqueue(null); return }
+    const job = await this.sandboxRepository.withRebuildDispatch(sandboxId, this.runner.id, async manager => {
+      await this.assertRebuildOwned?.()
+      return enqueue(manager)
+    })
+    this.rebuildJobId = job.id
+  }
 
   constructor(
     protected readonly sandboxRepository: SandboxRepository,
@@ -75,6 +97,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async sandboxInfo(sandboxId: string): Promise<RunnerSandboxInfo> {
+    if (this.rebuildOperationId) {
+      if (!this.rebuildJobId) throw new Error('Rebuild job identity is unavailable')
+      const job = await this.jobRepository.findOne({ where: {
+        id: this.rebuildJobId, runnerId: this.runner.id, resourceId: sandboxId,
+        resourceType: ResourceType.SANDBOX,
+      } })
+      if (!job || job.getPayload()?.kortixRebuildOperationId !== this.rebuildOperationId) {
+        throw new Error('Rebuild job identity changed')
+      }
+      if (job.status === JobStatus.FAILED) return { state: SandboxState.ERROR }
+      return { state: this.inferStateFromJob(job, {} as Sandbox) }
+    }
     // Query the sandbox entity
     const sandbox = await this.sandboxRepository.findOne({
       where: { id: sandboxId },
@@ -202,14 +236,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       sandboxClass: sandbox.sandboxClass,
     }
 
-    await this.jobService.createJob(
-      null,
-      JobType.CREATE_SANDBOX,
-      this.runner.id,
-      ResourceType.SANDBOX,
-      sandbox.id,
-      payload,
-    )
+    await this.createLifecycleJob(JobType.CREATE_SANDBOX, sandbox.id, { ...payload })
 
     this.logger.debug(`Created CREATE_SANDBOX job for sandbox ${sandbox.id} on runner ${this.runner.id}`)
 
@@ -222,7 +249,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     authToken: string,
     metadata?: { [key: string]: string },
   ): Promise<StartSandboxResponse | undefined> {
-    await this.jobService.createJob(null, JobType.START_SANDBOX, this.runner.id, ResourceType.SANDBOX, sandboxId, {
+    await this.createLifecycleJob(JobType.START_SANDBOX, sandboxId, {
       authToken,
       metadata,
     })
@@ -242,7 +269,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
-    await this.jobService.createJob(null, JobType.DESTROY_SANDBOX, this.runner.id, ResourceType.SANDBOX, sandboxId)
+    await this.createLifecycleJob(JobType.DESTROY_SANDBOX, sandboxId)
 
     this.logger.debug(`Created DESTROY_SANDBOX job for sandbox ${sandboxId} on runner ${this.runner.id}`)
   }

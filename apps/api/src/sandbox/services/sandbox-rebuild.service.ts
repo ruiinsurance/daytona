@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, Injectable } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import axios from 'axios'
+import { randomUUID } from 'node:crypto'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
 import { DockerRegistryService } from '../../docker-registry/services/docker-registry.service'
@@ -30,6 +32,8 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { RunnerService } from './runner.service'
 import { SandboxRebuildOperationStore, type SandboxRebuildOperationRecord } from './sandbox-rebuild-operation.store'
 import { SnapshotService } from './snapshot.service'
+import { withRebuildPreflightDeadline, REBUILD_PREFLIGHT_TIMEOUT_MS } from './sandbox-rebuild-operation.protocol'
+import { rebuildOperationView } from './sandbox-rebuild-operation.view'
 
 export interface RebuildSandboxInput {
   operationId: string
@@ -114,6 +118,103 @@ export class SandboxRebuildService {
     private readonly operationStore: SandboxRebuildOperationStore,
   ) {}
 
+  async getEligibility(sandboxId: string, organizationId: string) {
+    if (!isCanonicalV4Uuid(sandboxId)) throw new BadRequestException('Invalid sandbox identity')
+    const key = getStateChangeLockKey(sandboxId)
+    const code = new LockCode(randomUUID())
+    if (!(await this.redisLockProvider.lock(key, 30, code))) {
+      throw new ConflictException({ code: 'remote_operation_unresolved' })
+    }
+    try {
+      const sandbox = await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+      if (sandbox.state !== SandboxState.STARTED || sandbox.desiredState !== SandboxDesiredState.STARTED || sandbox.pending || !sandbox.runnerId || !sandbox.snapshot?.trim()) {
+        throw new ConflictException({ code: 'control_plane_inconsistent' })
+      }
+      const expectedSnapshot = sandbox.snapshot
+      if (sandbox.name.startsWith('DESTROYED_')) {
+        // A retained tombstone name needs operator review, not automatic rename.
+        throw new ConflictException({ code: 'historical_identity_requires_review' })
+      }
+      if (await this.operationStore.hasActive(sandboxId) || await this.sandboxRepository.hasIncompleteLifecycleJobs(sandboxId)) {
+        throw new ConflictException({ code: 'remote_operation_unresolved' })
+      }
+      assertLocalStorageBackend(sandbox)
+      const owner = await this.runnerService.findOne(sandbox.runnerId)
+      const ownerRunnerId = assertLocalOwnerAvailable(sandbox, owner)
+      if (!owner?.apiUrl) throw new ServiceUnavailableException('Runner inspection is unavailable')
+      const volumes = buildRunnerVolumes(sandbox)
+      const previousRuntime = await this.resolveSnapshot(sandbox, sandbox.snapshot, owner)
+      const workspace = volumes.find(volume => volume.mountPath === '/workspace')
+      if (!workspace) throw new LocalSandboxStorageIdentityError()
+      // This endpoint inspects actual binds/devices. It never calls start or the
+      // existing start verifier's force-stop-on-invalid-mount path.
+      let runtime: Record<string, unknown>
+      try {
+        const response = await axios.post(`${owner.apiUrl.replace(/\/+$/, '')}/sandboxes/${sandboxId}/rebuild-inspect`,
+          { volumes }, { headers: { Authorization: `Bearer ${owner.apiKey}` }, timeout: 10000 })
+        runtime = response.data
+      } catch {
+        // Axios errors retain Authorization/config and remote response bodies.
+        throw new ServiceUnavailableException('Runner workspace inspection is unavailable')
+      }
+      if (runtime?.verified !== true || runtime.sandboxId !== sandboxId || runtime.image !== previousRuntime.ref || typeof runtime.containerId !== 'string' || !runtime.containerId || typeof runtime.created !== 'string' || !runtime.created) {
+        throw new ServiceUnavailableException('Runner workspace evidence is unavailable')
+      }
+      if (!(await this.redisLockProvider.refreshOwned(key, 30, code))) throw new SandboxConflictError()
+      const current = await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+      if (current.state !== SandboxState.STARTED || current.desiredState !== SandboxDesiredState.STARTED
+        || current.pending || current.runnerId !== ownerRunnerId || current.snapshot !== expectedSnapshot
+        || current.name.startsWith('DESTROYED_')) {
+        throw new ConflictException({ code: 'control_plane_inconsistent' })
+      }
+      return { sandboxId, organizationId, ownerRunnerId, snapshot: expectedSnapshot,
+        state: SandboxState.STARTED, desiredState: SandboxDesiredState.STARTED, pending: false,
+        workspace: { volumeId: workspace.volumeId, mountPath: workspace.mountPath, subpath: workspace.subpath },
+        runtime: { verified: true, containerId: runtime.containerId, created: runtime.created } }
+    } finally { await this.redisLockProvider.unlockOwned(key, code) }
+  }
+
+  async getOperation(sandboxId: string, organizationId: string, operationId: string) {
+    if (!isCanonicalV4Uuid(sandboxId) || !isCanonicalV4Uuid(operationId)) {
+      throw new BadRequestException('Invalid rebuild operation identity')
+    }
+    // Preserve tenant scoping even when operation evidence is retained in Redis.
+    await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+    const record = await this.operationStore.get(sandboxId, operationId)
+    if (!record) throw new NotFoundException('Rebuild operation evidence is unavailable')
+    try {
+      const view = rebuildOperationView(record, sandboxId, operationId)
+      if (view.status === 'running') {
+        const lock = await this.redisLockProvider.getCode(getStateChangeLockKey(sandboxId))
+        return { ...view, executionState: lock?.getCode() === operationId ? 'running' : 'outcome_unknown' }
+      }
+      return view
+    } catch {
+      throw new ServiceUnavailableException('Rebuild operation evidence could not be verified')
+    }
+  }
+
+  async reconcilePreparation(sandboxId: string, organizationId: string, operationId: string, targetSnapshot: string) {
+    if (
+      !isCanonicalV4Uuid(sandboxId) ||
+      !isCanonicalV4Uuid(operationId) ||
+      typeof targetSnapshot !== 'string' ||
+      !targetSnapshot.trim()
+    ) {
+      throw new BadRequestException('Invalid rebuild operation identity')
+    }
+    await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+    const record = await this.operationStore.reconcilePreparation(
+      sandboxId,
+      operationId,
+      targetSnapshot,
+      getStateChangeLockKey(sandboxId),
+    )
+    if (!record || record.targetSnapshot !== targetSnapshot)
+      throw new NotFoundException('Rebuild operation evidence is unavailable')
+    return rebuildOperationView(record, sandboxId, operationId)
+  }
+
   async rebuild(
     sandboxId: string,
     organizationId: string,
@@ -134,6 +235,9 @@ export class SandboxRebuildService {
       throw new SandboxConflictError()
     }
     let lockLost = false
+    let expectedOwner: string | undefined
+    let expectedSnapshot: string | undefined
+    let expectedState = SandboxState.STARTED
     const heartbeat = setInterval(() => {
       this.redisLockProvider
         .refreshOwned(lockKey, REBUILD_LOCK_TTL_SECONDS, lockCode)
@@ -148,6 +252,12 @@ export class SandboxRebuildService {
     const assertLockOwned = async () => {
       if (lockLost || !(await this.redisLockProvider.refreshOwned(lockKey, REBUILD_LOCK_TTL_SECONDS, lockCode))) {
         throw new SandboxConflictError()
+      }
+      if (expectedOwner) {
+        const current = await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+        if (current.runnerId !== expectedOwner || current.state !== expectedState
+          || current.desiredState !== SandboxDesiredState.STARTED || current.pending
+          || current.snapshot !== expectedSnapshot) throw new SandboxConflictError()
       }
     }
 
@@ -175,6 +285,9 @@ export class SandboxRebuildService {
       }
 
       const runnerAdapter = await this.runnerAdapterFactory.create(owner)
+      runnerAdapter.setRebuildOperation?.(input.operationId, assertLockOwned)
+      expectedOwner = ownerRunnerId
+      expectedSnapshot = previousSnapshot
       const organization = await this.organizationService.findOne(sandbox.organizationId)
       let volumes
       try {
@@ -191,12 +304,39 @@ export class SandboxRebuildService {
         metadata.domainAllowList = sandbox.domainAllowList
       }
 
+      if (
+        !(await this.operationStore.begin(sandbox.id, input.operationId, targetSnapshotName, {
+          previousSnapshot,
+          ownerRunnerId,
+        }))
+      ) {
+        const existing = await this.operationStore.get(sandbox.id, input.operationId)
+        if (!existing) throw new SandboxConflictError()
+        return this.replayOperation(existing, targetSnapshotName)
+      }
+
+      const preflightDeadline = Date.now() + REBUILD_PREFLIGHT_TIMEOUT_MS
+
       // Starting an already-running sandbox is the Runner's existing read/verify
       // boundary for canonical bind sources, mount devices, and daemon readiness.
       try {
-        await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, metadata)
-        await this.waitForRunnerState(runnerAdapter, owner, sandbox.id, SandboxState.STARTED)
+        await withRebuildPreflightDeadline(
+          async () => {
+            await assertLockOwned()
+            await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, metadata)
+            await this.waitForRunnerState(runnerAdapter, owner, sandbox.id, SandboxState.STARTED)
+          },
+          Math.max(1, preflightDeadline - Date.now()),
+        )
       } catch {
+        await this.operationStore.complete(sandbox.id, input.operationId, targetSnapshotName, {
+          outcome: 'rebuild_preflight_failed',
+          operationId: input.operationId,
+          sandboxId: sandbox.id,
+          ownerRunnerId,
+          previousSnapshot,
+          targetSnapshot: targetSnapshotName,
+        })
         throw new LocalSandboxStorageIdentityError()
       }
 
@@ -204,13 +344,25 @@ export class SandboxRebuildService {
       let targetSnapshot: Snapshot
       let targetRuntime: ResolvedRebuildSnapshot
       try {
-        previousRuntime = await this.resolveSnapshot(sandbox, previousSnapshot, owner)
-        targetSnapshot = await this.snapshotService.getSnapshotByName(targetSnapshotName, sandbox.organizationId)
-        targetRuntime = await this.resolveSnapshot(sandbox, targetSnapshot.name, owner, targetSnapshot)
-        await this.ensureSnapshotAvailable(runnerAdapter, previousRuntime, owner)
-        await this.ensureSnapshotAvailable(runnerAdapter, targetRuntime, owner)
+        const resolved = await withRebuildPreflightDeadline(
+          async () => {
+            const previousRuntime = await this.resolveSnapshot(sandbox, previousSnapshot, owner)
+            const targetSnapshot = await this.snapshotService.getSnapshotByName(
+              targetSnapshotName,
+              sandbox.organizationId,
+            )
+            const targetRuntime = await this.resolveSnapshot(sandbox, targetSnapshot.name, owner, targetSnapshot)
+            await this.ensureSnapshotAvailable(runnerAdapter, previousRuntime, owner)
+            await this.ensureSnapshotAvailable(runnerAdapter, targetRuntime, owner)
+            return { previousRuntime, targetSnapshot, targetRuntime }
+          },
+          Math.max(1, preflightDeadline - Date.now()),
+        )
+        previousRuntime = resolved.previousRuntime
+        targetSnapshot = resolved.targetSnapshot
+        targetRuntime = resolved.targetRuntime
       } catch {
-        return {
+        const result: RebuildPreflightFailedResult = {
           outcome: 'rebuild_preflight_failed',
           operationId: input.operationId,
           sandboxId: sandbox.id,
@@ -218,17 +370,30 @@ export class SandboxRebuildService {
           previousSnapshot,
           targetSnapshot: targetSnapshotName,
         }
+        // A lost HTTP response must not erase proof that compute was unchanged.
+        await this.operationStore.complete(sandbox.id, input.operationId, targetSnapshotName, result)
+        return result
       }
       await assertLockOwned()
 
-      if (!(await this.operationStore.begin(sandbox.id, input.operationId, targetSnapshot.name))) {
+      if (
+        !(await this.operationStore.beginMutation(
+          sandbox.id,
+          input.operationId,
+          targetSnapshot.name,
+          lockKey,
+          lockCode.getCode(),
+        ))
+      ) {
         const existing = await this.operationStore.get(sandbox.id, input.operationId)
         if (!existing) throw new SandboxConflictError()
         return this.replayOperation(existing, targetSnapshot.name)
       }
 
+      await assertLockOwned()
       await runnerAdapter.destroySandbox(sandbox.id)
       await this.waitForRunnerState(runnerAdapter, owner, sandbox.id, SandboxState.DESTROYED)
+      await assertLockOwned()
       const targetSandbox = Object.assign(new Sandbox(), sandbox, {
         env: {
           ...sandbox.env,
@@ -259,6 +424,7 @@ export class SandboxRebuildService {
             runnerId: ownerRunnerId,
           },
         })
+        expectedSnapshot = targetSnapshot.name
 
         result = {
           outcome: 'rebuilt',
@@ -274,6 +440,7 @@ export class SandboxRebuildService {
           await assertLockOwned()
           await this.destroySandboxIfPresent(runnerAdapter, sandbox.id)
           await this.waitForRunnerState(runnerAdapter, owner, sandbox.id, SandboxState.DESTROYED)
+          await assertLockOwned()
           await this.createSandboxGeneration(
             runnerAdapter,
             owner,
@@ -281,6 +448,7 @@ export class SandboxRebuildService {
             previousRuntime,
             organization?.sandboxMetadata,
           )
+          await assertLockOwned()
           await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, metadata)
           await this.waitForRunnerState(runnerAdapter, owner, sandbox.id, SandboxState.STARTED)
           result = {
@@ -291,7 +459,9 @@ export class SandboxRebuildService {
             previousSnapshot,
             targetSnapshot: targetSnapshot.name,
           }
-        } catch {
+        } catch (rollbackError) {
+          if (rollbackError instanceof SandboxConflictError) throw rollbackError
+          await assertLockOwned()
           await this.sandboxRepository.updateWhere(sandbox.id, {
             updateData: {
               state: SandboxState.ERROR,
@@ -305,6 +475,7 @@ export class SandboxRebuildService {
               runnerId: ownerRunnerId,
             },
           })
+          expectedState = SandboxState.ERROR
           result = {
             outcome: 'rebuild_failed_rollback_failed',
             operationId: input.operationId,
@@ -315,6 +486,7 @@ export class SandboxRebuildService {
           }
         }
       }
+      await assertLockOwned()
       await this.operationStore.complete(sandbox.id, input.operationId, targetSnapshot.name, result)
       return result
     } finally {

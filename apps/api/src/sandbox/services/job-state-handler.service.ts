@@ -72,6 +72,14 @@ export class JobStateHandlerService {
       return
     }
 
+    // The synchronous rebuild orchestrator publishes its own fenced outcome.
+    // Internal DESTROY/CREATE/START jobs must never run generic lifecycle state
+    // updates, even if their callback arrives after the rebuild lock has gone.
+    if ([JobType.CREATE_SANDBOX, JobType.START_SANDBOX, JobType.DESTROY_SANDBOX].includes(job.type)
+      && job.getPayload()?.kortixRebuildOperationId) {
+      return
+    }
+
     switch (job.type) {
       case JobType.CREATE_SANDBOX:
         await this.handleCreateSandboxJobCompletion(job)
