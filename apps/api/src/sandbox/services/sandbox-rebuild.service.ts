@@ -147,9 +147,15 @@ export class SandboxRebuildService {
       if (!workspace) throw new LocalSandboxStorageIdentityError()
       // This endpoint inspects actual binds/devices. It never calls start or the
       // existing start verifier's force-stop-on-invalid-mount path.
-      const response = await axios.post(`${owner.apiUrl.replace(/\/+$/, '')}/sandboxes/${sandboxId}/rebuild-inspect`,
-        { volumes }, { headers: { Authorization: `Bearer ${owner.apiKey}` }, timeout: 10000 })
-      const runtime = response.data
+      let runtime: Record<string, unknown>
+      try {
+        const response = await axios.post(`${owner.apiUrl.replace(/\/+$/, '')}/sandboxes/${sandboxId}/rebuild-inspect`,
+          { volumes }, { headers: { Authorization: `Bearer ${owner.apiKey}` }, timeout: 10000 })
+        runtime = response.data
+      } catch {
+        // Axios errors retain Authorization/config and remote response bodies.
+        throw new ServiceUnavailableException('Runner workspace inspection is unavailable')
+      }
       if (runtime?.verified !== true || runtime.sandboxId !== sandboxId || runtime.image !== previousRuntime.ref || typeof runtime.containerId !== 'string' || !runtime.containerId || typeof runtime.created !== 'string' || !runtime.created) {
         throw new ServiceUnavailableException('Runner workspace evidence is unavailable')
       }
