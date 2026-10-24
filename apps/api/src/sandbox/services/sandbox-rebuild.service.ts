@@ -130,6 +130,7 @@ export class SandboxRebuildService {
       if (sandbox.state !== SandboxState.STARTED || sandbox.desiredState !== SandboxDesiredState.STARTED || sandbox.pending || !sandbox.runnerId || !sandbox.snapshot?.trim()) {
         throw new ConflictException({ code: 'control_plane_inconsistent' })
       }
+      const expectedSnapshot = sandbox.snapshot
       if (sandbox.name.startsWith('DESTROYED_')) {
         // A retained tombstone name needs operator review, not automatic rename.
         throw new ConflictException({ code: 'historical_identity_requires_review' })
@@ -161,11 +162,13 @@ export class SandboxRebuildService {
       }
       if (!(await this.redisLockProvider.refreshOwned(key, 30, code))) throw new SandboxConflictError()
       const current = await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
-      if (current.state !== sandbox.state || current.desiredState !== sandbox.desiredState || current.pending || current.runnerId !== ownerRunnerId || current.snapshot !== sandbox.snapshot) {
+      if (current.state !== SandboxState.STARTED || current.desiredState !== SandboxDesiredState.STARTED
+        || current.pending || current.runnerId !== ownerRunnerId || current.snapshot !== expectedSnapshot
+        || current.name.startsWith('DESTROYED_')) {
         throw new ConflictException({ code: 'control_plane_inconsistent' })
       }
-      return { sandboxId, organizationId, ownerRunnerId, snapshot: sandbox.snapshot,
-        state: sandbox.state, desiredState: sandbox.desiredState, pending: false,
+      return { sandboxId, organizationId, ownerRunnerId, snapshot: expectedSnapshot,
+        state: SandboxState.STARTED, desiredState: SandboxDesiredState.STARTED, pending: false,
         workspace: { volumeId: workspace.volumeId, mountPath: workspace.mountPath, subpath: workspace.subpath },
         runtime: { verified: true, containerId: runtime.containerId, created: runtime.created } }
     } finally { await this.redisLockProvider.unlockOwned(key, code) }
