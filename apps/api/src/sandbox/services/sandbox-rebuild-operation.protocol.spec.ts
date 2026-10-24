@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
+import { SandboxRebuildOperationStore } from './sandbox-rebuild-operation.store'
 import {
   ADMIT_REBUILD_MUTATION,
   RECONCILE_EXPIRED_REBUILD_PREFLIGHT,
@@ -95,4 +96,31 @@ integration('foreign ownership cannot admit mutation and foreign active evidence
 })
 test('bounded preflight returns failure even when snapshot preparation never resolves', async () => {
   await expect(withRebuildPreflightDeadline(() => new Promise(() => {}), 5)).rejects.toThrow('before compute mutation')
+})
+
+integration('rotated owners and late terminal writers cannot replace retained operation evidence', async () => {
+  const f = await fixture()
+  const sandboxId = `test-${randomUUID()}`
+  const operationId = 'operation'
+  const keys = [`sandbox:${sandboxId}:state-change`, `sandbox-rebuild-active:${sandboxId}`, `sandbox-rebuild-operation:${sandboxId}:${operationId}`]
+  const store = new SandboxRebuildOperationStore(f.redis)
+  const record = { ...identity, sandboxId, operationId, status: 'running', stage: 'mutating' }
+  const result = { ...identity, sandboxId, operationId, outcome: 'rebuilt' as const }
+  try {
+    await f.redis.set(keys[0], 'foreign-owner', 'EX', 600)
+    await f.redis.set(keys[1], operationId, 'EX', 600)
+    await f.redis.set(keys[2], JSON.stringify(record), 'EX', 600)
+    await expect(store.complete(sandboxId, operationId, identity.targetSnapshot, result)).rejects.toThrow()
+    expect(JSON.parse((await f.redis.get(keys[2]))!).status).toBe('running')
+    await f.redis.set(keys[0], operationId, 'EX', 600)
+    await store.complete(sandboxId, operationId, identity.targetSnapshot, result)
+    const terminal = await f.redis.get(keys[2])
+    await f.redis.set(keys[1], operationId, 'EX', 600)
+    await expect(store.complete(sandboxId, operationId, identity.targetSnapshot,
+      { ...result, outcome: 'rebuild_failed_previous_restored' })).rejects.toThrow()
+    expect(await f.redis.get(keys[2])).toBe(terminal)
+  } finally {
+    await f.redis.del(...keys)
+    await f.cleanup()
+  }
 })

@@ -158,7 +158,8 @@ export class SandboxRebuildOperationStore {
        local raw = redis.call('GET', KEYS[2])
        if not raw then return 0 end
        local old = cjson.decode(raw)
-       if old.status ~= 'running' or old.targetSnapshot ~= ARGV[4] then return 0 end
+       if old.status ~= 'running' or old.targetSnapshot ~= ARGV[4]
+         or old.operationId ~= ARGV[1] or old.sandboxId ~= ARGV[5] then return 0 end
        redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
        if redis.call('GET', KEYS[1]) == ARGV[1] then
          redis.call('DEL', KEYS[1])
@@ -172,6 +173,7 @@ export class SandboxRebuildOperationStore {
       JSON.stringify(record),
       OPERATION_TTL_SECONDS,
       targetSnapshot,
+      sandboxId,
     )
     if (Number(completed) !== 1) throw new SandboxConflictError()
   }
