@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, ConflictException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
+import { BadRequestException, HttpStatus, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common'
 import axios from 'axios'
 import { randomUUID } from 'node:crypto'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -15,6 +15,7 @@ import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
 import { Runner } from '../entities/runner.entity'
 import { Sandbox } from '../entities/sandbox.entity'
 import { Snapshot } from '../entities/snapshot.entity'
+import { SandboxRebuildHttpException } from '../errors/sandbox-rebuild-http.exception'
 import { SandboxConflictError } from '../errors/sandbox-conflict.error'
 import { LocalSandboxStorageIdentityError } from '../errors/local-sandbox-storage-identity.error'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -123,20 +124,20 @@ export class SandboxRebuildService {
     const key = getStateChangeLockKey(sandboxId)
     const code = new LockCode(randomUUID())
     if (!(await this.redisLockProvider.lock(key, 30, code))) {
-      throw new ConflictException({ code: 'remote_operation_unresolved' })
+      throw new SandboxRebuildHttpException({ code: 'remote_operation_unresolved' }, HttpStatus.CONFLICT)
     }
     try {
       const sandbox = await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
       if (sandbox.state !== SandboxState.STARTED || sandbox.desiredState !== SandboxDesiredState.STARTED || sandbox.pending || !sandbox.runnerId || !sandbox.snapshot?.trim()) {
-        throw new ConflictException({ code: 'control_plane_inconsistent' })
+        throw new SandboxRebuildHttpException({ code: 'control_plane_inconsistent' }, HttpStatus.CONFLICT)
       }
       const expectedSnapshot = sandbox.snapshot
       if (sandbox.name.startsWith('DESTROYED_')) {
         // A retained tombstone name needs operator review, not automatic rename.
-        throw new ConflictException({ code: 'historical_identity_requires_review' })
+        throw new SandboxRebuildHttpException({ code: 'historical_identity_requires_review' }, HttpStatus.CONFLICT)
       }
       if (await this.operationStore.hasActive(sandboxId) || await this.sandboxRepository.hasIncompleteLifecycleJobs(sandboxId)) {
-        throw new ConflictException({ code: 'remote_operation_unresolved' })
+        throw new SandboxRebuildHttpException({ code: 'remote_operation_unresolved' }, HttpStatus.CONFLICT)
       }
       assertLocalStorageBackend(sandbox)
       const owner = await this.runnerService.findOne(sandbox.runnerId)
@@ -165,7 +166,7 @@ export class SandboxRebuildService {
       if (current.state !== SandboxState.STARTED || current.desiredState !== SandboxDesiredState.STARTED
         || current.pending || current.runnerId !== ownerRunnerId || current.snapshot !== expectedSnapshot
         || current.name.startsWith('DESTROYED_')) {
-        throw new ConflictException({ code: 'control_plane_inconsistent' })
+        throw new SandboxRebuildHttpException({ code: 'control_plane_inconsistent' }, HttpStatus.CONFLICT)
       }
       return { sandboxId, organizationId, ownerRunnerId, snapshot: expectedSnapshot,
         state: SandboxState.STARTED, desiredState: SandboxDesiredState.STARTED, pending: false,
