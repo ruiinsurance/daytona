@@ -10,6 +10,7 @@ import { AllExceptionsFilter } from '../../filters/all-exceptions.filter'
 import { FailedAuthTrackerService } from '../../auth/failed-auth-tracker.service'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { OrganizationAuthContextGuard } from '../../organization/guards/organization-auth-context.guard'
+import { LocalSandboxStorageIdentityError } from '../errors/local-sandbox-storage-identity.error'
 import { SandboxAccessGuard } from '../guards/sandbox-access.guard'
 import { SandboxRebuildService } from '../services/sandbox-rebuild.service'
 import { SandboxRebuildController } from './sandbox-rebuild.controller'
@@ -28,7 +29,7 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
   let app: INestApplication
   let baseUrl: string
   const service = { rebuild: jest.fn(), getEligibility: jest.fn() }
-  const tracker = { incrementFailedAuth: jest.fn(async () => undefined) }
+  const tracker = new FailedAuthTrackerService({} as never, {} as never)
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -45,13 +46,16 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
       request.user = { role: 'admin', userId: 'test-user', organizationId, organization: {}, organizationUser: {} }
       next()
     })
-    app.useGlobalFilters(new AllExceptionsFilter(tracker as FailedAuthTrackerService))
+    app.useGlobalFilters(new AllExceptionsFilter(tracker))
     await app.listen(0, '127.0.0.1')
     baseUrl = await app.getUrl()
   })
 
   afterAll(async () => { await app?.close() })
-  beforeEach(() => { jest.clearAllMocks() })
+  beforeEach(() => {
+    jest.clearAllMocks()
+    jest.spyOn(tracker, 'incrementFailedAuth').mockResolvedValue(undefined)
+  })
   afterEach(() => { jest.restoreAllMocks() })
 
   async function postRebuild() {
@@ -117,6 +121,17 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
     expect(factory.create).not.toHaveBeenCalled()
     expect(snapshots.getSnapshotByName).not.toHaveBeenCalled()
     expect(inspect).not.toHaveBeenCalled()
+  })
+
+  it('preserves the fixed storage identity code without exposing internal details', async () => {
+    service.rebuild.mockRejectedValue(new LocalSandboxStorageIdentityError())
+    const result = await postRebuild()
+    expect(result.status).toBe(409)
+    expect(result.body).toEqual({
+      code: 'storage_identity_invalid', statusCode: 409, error: 'Conflict',
+      message: 'The sandbox local Volume or mount identity could not be verified',
+      path: `/api/sandbox/${sandboxId}/rebuild`, timestamp: expect.any(String),
+    })
   })
 
   it('keeps arbitrary HttpException bodies private even on the rebuild route', async () => {
