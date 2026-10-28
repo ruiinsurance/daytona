@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, Get, HttpCode, HttpException, HttpStatus, Param, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger'
 import { SkipThrottle } from '@nestjs/throttler'
 import { Audit } from '../../audit/decorators/audit.decorator'
@@ -19,6 +19,7 @@ import { OrganizationAuthContext } from '../../common/interfaces/organization-au
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationAuthContextGuard } from '../../organization/guards/organization-auth-context.guard'
+import { SandboxRebuildHttpException } from '../errors/sandbox-rebuild-http.exception'
 import { RebuildSandboxDto } from '../dto/rebuild-sandbox.dto'
 import { SandboxAccessGuard } from '../guards/sandbox-access.guard'
 import { LocalSandboxRebuildResult, SandboxRebuildService } from '../services/sandbox-rebuild.service'
@@ -109,10 +110,9 @@ export class SandboxRebuildController {
     }
 
     const { status, retryable } = this.failureResponse(result)
-    throw new HttpException(
+    throw new SandboxRebuildHttpException(
       {
         success: false,
-        code: result.outcome,
         retryable,
         ...result,
       },

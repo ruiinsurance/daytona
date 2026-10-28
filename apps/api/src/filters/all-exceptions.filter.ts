@@ -17,6 +17,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common'
 import { ThrottlerException } from '@nestjs/throttler'
+import { SandboxRebuildHttpException } from '../sandbox/errors/sandbox-rebuild-http.exception'
+import { LocalSandboxStorageIdentityError } from '../sandbox/errors/local-sandbox-storage-identity.error'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 
 @Catch()
@@ -78,7 +80,16 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode = HttpStatus.INTERNAL_SERVER_ERROR
     }
 
+    // Only explicitly public rebuild exceptions may extend the legacy envelope.
+    // Raw HttpException/Axios bodies can contain secrets and must stay private.
+    const rebuildEvidence = exception instanceof SandboxRebuildHttpException
+      ? exception.getPublicResponse()
+      : exception instanceof LocalSandboxStorageIdentityError
+        ? { code: 'storage_identity_invalid' }
+        : {}
+
     response.status(statusCode).json({
+      ...rebuildEvidence,
       path: request.url,
       timestamp: new Date().toISOString(),
       statusCode,
