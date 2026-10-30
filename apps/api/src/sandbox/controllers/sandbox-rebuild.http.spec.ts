@@ -28,7 +28,8 @@ const retainedIdentity = { ...input, sandboxId, ownerRunnerId, previousSnapshot:
 describe('rebuild protocol through the real Nest HTTP exception pipeline', () => {
   let app: INestApplication
   let baseUrl: string
-  const service = { rebuild: jest.fn(), getEligibility: jest.fn() }
+  const service = { rebuild: jest.fn(), getEligibility: jest.fn(), getOperation: jest.fn() }
+  let activeOrganizationId = organizationId
   const tracker = new FailedAuthTrackerService({} as never, {} as never)
 
   beforeAll(async () => {
@@ -43,7 +44,7 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
     app = module.createNestApplication()
     app.setGlobalPrefix('api')
     app.use((request, _response, next) => {
-      request.user = { role: 'admin', userId: 'test-user', organizationId, organization: {}, organizationUser: {} }
+      request.user = { role: 'admin', userId: 'test-user', organizationId: activeOrganizationId, organization: {}, organizationUser: {} }
       next()
     })
     app.useGlobalFilters(new AllExceptionsFilter(tracker))
@@ -54,6 +55,7 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
   afterAll(async () => { await app?.close() })
   beforeEach(() => {
     jest.clearAllMocks()
+    activeOrganizationId = organizationId
     jest.spyOn(tracker, 'incrementFailedAuth').mockResolvedValue(undefined)
   })
   afterEach(() => { jest.restoreAllMocks() })
@@ -94,6 +96,24 @@ describe('rebuild protocol through the real Nest HTTP exception pipeline', () =>
     expect(await postRebuild()).toEqual({
       status: 200, body: { ...retainedIdentity, outcome: 'rebuilt', code: 'rebuilt', success: true },
     })
+  })
+
+  it('allows only the original organization to inspect retained evidence after row loss', async () => {
+    const record = { sandboxId, operationId, organizationId, status: 'running', stage: 'mutating', targetSnapshot: 'target-snapshot' }
+    const repository = { findOne: jest.fn().mockResolvedValue(null) }
+    const store = { get: jest.fn().mockResolvedValue(record) }
+    const reader = new SandboxRebuildService(repository as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never, { getCode: async () => null } as never, store as never)
+    service.getOperation.mockImplementation((id, org, op) => reader.getOperation(id, org, op))
+    const path = `${baseUrl}/api/sandbox/${sandboxId}/rebuild/${operationId}`
+    const own = await fetch(path)
+    expect(own.status).toBe(200)
+    expect(await own.json()).toEqual({ sandboxId, operationId, targetSnapshot: 'target-snapshot', status: 'running', stage: 'mutating', executionState: 'outcome_unknown' })
+    activeOrganizationId = '55555555-5555-4555-8555-555555555555'
+    const foreign = await fetch(path)
+    expect(foreign.status).toBe(404)
+    expect(JSON.stringify(await foreign.json())).not.toContain(organizationId)
+    expect(service.rebuild).not.toHaveBeenCalled()
   })
 
   it.each([

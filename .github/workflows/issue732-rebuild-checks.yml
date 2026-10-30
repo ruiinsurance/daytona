@@ -8,6 +8,11 @@ on:
       - 'apps/runner/**'
       - '.github/workflows/issue732-rebuild-checks.yml'
   workflow_dispatch:
+  push:
+    branches: [masiqi/issue732-orphan-evidence]
+    paths:
+      - 'apps/api/src/sandbox/**'
+      - '.github/workflows/issue732-rebuild-checks.yml'
 
 permissions:
   contents: read
@@ -52,6 +57,7 @@ jobs:
             apps/api/src/sandbox/services/sandbox-rebuild-admission.spec.ts \
             apps/api/src/sandbox/services/job-state-handler.rebuild.spec.ts \
             apps/api/src/sandbox/services/sandbox-rebuild-operation.protocol.spec.ts \
+            apps/api/src/sandbox/services/sandbox-rebuild-operation-tenant.spec.ts \
             apps/api/src/sandbox/services/sandbox-rebuild-operation.view.spec.ts \
             apps/api/src/sandbox/controllers/sandbox-rebuild.controller.spec.ts \
             apps/api/src/sandbox/runner-adapter/runnerAdapter.v2.rebuild.spec.ts \

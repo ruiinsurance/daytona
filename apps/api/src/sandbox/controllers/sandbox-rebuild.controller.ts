@@ -51,7 +51,7 @@ export class SandboxRebuildController {
   })
   @ApiParam({ name: 'sandboxId', type: 'string' })
   @ApiParam({ name: 'operationId', type: 'string' })
-  @UseGuards(OrganizationAuthContextGuard, SandboxAccessGuard)
+  @UseGuards(OrganizationAuthContextGuard)
   async getRebuildOperation(
     @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
     @Param('sandboxId') sandboxId: string,

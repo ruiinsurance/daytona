@@ -6,6 +6,7 @@
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Injectable } from '@nestjs/common'
 import Redis from 'ioredis'
+import { isValidUuid } from '../../common/utils/uuid'
 import type { LocalSandboxRebuildResult } from './sandbox-rebuild.service'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { SandboxConflictError } from '../errors/sandbox-conflict.error'
@@ -17,6 +18,7 @@ const OPERATION_TTL_SECONDS = 7 * 24 * 60 * 60
 export type SandboxRebuildOperationRecord =
   | {
       status: 'running'
+      organizationId?: string
       stage?: 'preflight' | 'mutating'
       previousSnapshot?: string
       ownerRunnerId?: string
@@ -26,6 +28,7 @@ export type SandboxRebuildOperationRecord =
     }
   | {
       status: 'complete'
+      organizationId?: string
       operationId: string
       sandboxId: string
       targetSnapshot: string
@@ -54,7 +57,8 @@ export class SandboxRebuildOperationStore {
       record.operationId !== operationId ||
       record.sandboxId !== sandboxId ||
       typeof record.targetSnapshot !== 'string' ||
-      !record.targetSnapshot
+      !record.targetSnapshot ||
+      (record.organizationId !== undefined && (typeof record.organizationId !== 'string' || !isValidUuid(record.organizationId)))
     ) {
       throw new Error('Invalid sandbox rebuild operation record')
     }
@@ -68,7 +72,7 @@ export class SandboxRebuildOperationStore {
     sandboxId: string,
     operationId: string,
     targetSnapshot: string,
-    preparation?: { previousSnapshot: string; ownerRunnerId: string },
+    preparation?: { previousSnapshot: string; ownerRunnerId: string; organizationId: string },
   ): Promise<boolean> {
     const record: SandboxRebuildOperationRecord = {
       status: 'running',
@@ -160,7 +164,9 @@ export class SandboxRebuildOperationStore {
        local old = cjson.decode(raw)
        if old.status ~= 'running' or old.targetSnapshot ~= ARGV[4]
          or old.operationId ~= ARGV[1] or old.sandboxId ~= ARGV[5] then return 0 end
-       redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[3])
+       local terminal = cjson.decode(ARGV[2])
+       if old.organizationId then terminal.organizationId = old.organizationId end
+       redis.call('SET', KEYS[2], cjson.encode(terminal), 'EX', ARGV[3])
        if redis.call('GET', KEYS[1]) == ARGV[1] then
          redis.call('DEL', KEYS[1])
        end

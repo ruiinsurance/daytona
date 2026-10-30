@@ -124,3 +124,33 @@ integration('rotated owners and late terminal writers cannot replace retained op
     await f.cleanup()
   }
 })
+
+integration('new operation tenant survives preflight cancellation and normal completion', async () => {
+  const f = await fixture()
+  const sandboxId = `test-${randomUUID()}`
+  const operationId = randomUUID()
+  const organizationId = randomUUID()
+  const lockKey = `sandbox:${sandboxId}:state-change`
+  const store = new SandboxRebuildOperationStore(f.redis)
+  const prep = { previousSnapshot: 'previous', ownerRunnerId: 'owner', organizationId }
+  const activeKey = `sandbox-rebuild-active:${sandboxId}`
+  const operationKey = `sandbox-rebuild-operation:${sandboxId}:${operationId}`
+  try {
+    expect(await store.begin(sandboxId, operationId, 'target', prep)).toBe(true)
+    expect((await store.get(sandboxId, operationId))?.organizationId).toBe(organizationId)
+    const cancelled = await store.reconcilePreparation(sandboxId, operationId, 'target', lockKey)
+    expect(cancelled?.status).toBe('complete')
+    expect(cancelled?.organizationId).toBe(organizationId)
+    await f.redis.del(activeKey, operationKey)
+    expect(await store.begin(sandboxId, operationId, 'target', prep)).toBe(true)
+    await f.redis.set(lockKey, operationId, 'EX', 600)
+    expect(await store.beginMutation(sandboxId, operationId, 'target', lockKey, operationId)).toBe(true)
+    await store.complete(sandboxId, operationId, 'target', {
+      outcome: 'rebuilt', sandboxId, operationId, targetSnapshot: 'target', previousSnapshot: 'previous', ownerRunnerId: 'owner',
+    })
+    expect((await store.get(sandboxId, operationId))?.organizationId).toBe(organizationId)
+  } finally {
+    await f.redis.del(lockKey, activeKey, operationKey)
+    await f.cleanup()
+  }
+})

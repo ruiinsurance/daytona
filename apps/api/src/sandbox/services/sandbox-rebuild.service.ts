@@ -179,10 +179,23 @@ export class SandboxRebuildService {
     if (!isCanonicalV4Uuid(sandboxId) || !isCanonicalV4Uuid(operationId)) {
       throw new BadRequestException('Invalid rebuild operation identity')
     }
-    // Preserve tenant scoping even when operation evidence is retained in Redis.
-    await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
-    const record = await this.operationStore.get(sandboxId, operationId)
-    if (!record) throw new NotFoundException('Rebuild operation evidence is unavailable')
+    // The row can disappear before retained operation evidence expires. A
+    // missing row is never itself proof of termination or permission to mutate.
+    const sandbox = await this.sandboxRepository.findOne({ where: { id: sandboxId } })
+    if (sandbox && sandbox.organizationId !== organizationId) {
+      throw new NotFoundException('Rebuild operation evidence is unavailable')
+    }
+    let record: SandboxRebuildOperationRecord | null
+    try {
+      record = await this.operationStore.get(sandboxId, operationId)
+    } catch {
+      if (!sandbox) throw new NotFoundException('Rebuild operation evidence is unavailable')
+      throw new ServiceUnavailableException('Rebuild operation evidence could not be verified')
+    }
+    if (!record || (record.organizationId !== undefined && record.organizationId !== organizationId)
+      || (!sandbox && record.organizationId !== organizationId)) {
+      throw new NotFoundException('Rebuild operation evidence is unavailable')
+    }
     try {
       const view = rebuildOperationView(record, sandboxId, operationId)
       if (view.status === 'running') {
@@ -309,6 +322,7 @@ export class SandboxRebuildService {
         !(await this.operationStore.begin(sandbox.id, input.operationId, targetSnapshotName, {
           previousSnapshot,
           ownerRunnerId,
+          organizationId: sandbox.organizationId,
         }))
       ) {
         const existing = await this.operationStore.get(sandbox.id, input.operationId)
