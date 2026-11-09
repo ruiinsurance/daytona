@@ -13,7 +13,24 @@ const ids = [
 ]
 const organizationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
-const sandboxSchema = new EntitySchema({
+interface CursorSandbox {
+  id: string
+  organizationId: string
+  name: string
+  state: string
+  desiredState: string
+  createdAt: Date
+  updatedAt: Date
+  lastActivityAt: CursorActivity | null
+}
+
+interface CursorActivity {
+  sandboxId: string
+  lastActivityAt: Date | null
+  sandbox: CursorSandbox
+}
+
+const sandboxSchema = new EntitySchema<CursorSandbox>({
   name: 'CursorSandbox',
   tableName: 'cursor_test_sandbox',
   columns: {
@@ -29,7 +46,7 @@ const sandboxSchema = new EntitySchema({
     lastActivityAt: { type: 'one-to-one', target: 'CursorActivity', inverseSide: 'sandbox' },
   },
 })
-const activitySchema = new EntitySchema({
+const activitySchema = new EntitySchema<CursorActivity>({
   name: 'CursorActivity',
   tableName: 'cursor_test_activity',
   columns: {
