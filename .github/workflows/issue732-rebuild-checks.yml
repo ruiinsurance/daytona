@@ -21,6 +21,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_DB: daytona_cursor_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d daytona_cursor_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
       redis:
         image: redis:7-alpine
         ports: ['6379:6379']
@@ -34,6 +46,7 @@ jobs:
       NX_NO_CLOUD: 'true'
       REBUILD_PROTOCOL_REDIS_TEST: '1'
       REBUILD_PROTOCOL_REDIS_URL: redis://127.0.0.1:6379/15
+      DAYTONA_CURSOR_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/daytona_cursor_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,6 +58,8 @@ jobs:
         run: yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath apps/api/src/sandbox/controllers/sandbox-rebuild.http.spec.ts
       - name: API typecheck
         run: yarn tsc --noEmit -p apps/api/tsconfig.app.json
+      - name: PostgreSQL sandbox cursor precision
+        run: yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath apps/api/src/sandbox/adapters/sandbox-typeorm-search.cursor.postgres.spec.ts
       - name: Provider lifecycle and real Redis regressions
         run: |
           yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath \

@@ -135,17 +135,22 @@ export class SandboxTypeormSearchAdapter implements SandboxSearchAdapter {
       const { sortValue, id } = this.decodeCursor(pagination.cursor)
       const op = sortDirection === 'ASC' ? '>' : '<'
 
-      qb.andWhere(
-        new Brackets((cursorQb) => {
-          cursorQb.where(`${sortField} ${op} :cursorSortValue`, { cursorSortValue: sortValue }).orWhere(
-            new Brackets((tieBreaker) => {
-              tieBreaker
-                .where(`${sortField} = :cursorSortValue`, { cursorSortValue: sortValue })
-                .andWhere(`sandbox.id ${op} :cursorId`, { cursorId: id })
-            }),
-          )
-        }),
-      )
+      if (sort.field === SandboxSearchSortField.LAST_ACTIVITY_AT && sortValue === null) {
+        qb.andWhere(`${sortField} IS NULL AND sandbox.id ${op} :cursorId`, { cursorId: id })
+      } else {
+        qb.andWhere(
+          new Brackets((cursorQb) => {
+            cursorQb.where(`${sortField} ${op} :cursorSortValue`, { cursorSortValue: sortValue }).orWhere(
+              new Brackets((tieBreaker) => {
+                tieBreaker
+                  .where(`${sortField} = :cursorSortValue`, { cursorSortValue: sortValue })
+                  .andWhere(`sandbox.id ${op} :cursorId`, { cursorId: id })
+              }),
+            )
+            if (sort.field === SandboxSearchSortField.LAST_ACTIVITY_AT) cursorQb.orWhere(`${sortField} IS NULL`)
+          }),
+        )
+      }
     }
 
     // Sorting with id as tie-breaker
@@ -155,7 +160,13 @@ export class SandboxTypeormSearchAdapter implements SandboxSearchAdapter {
     // Fetch one extra to determine if there are more items
     qb.take(pagination.limit + 1)
 
-    const items = await qb.getMany()
+    const isTimestampSort =
+      sort.field === SandboxSearchSortField.CREATED_AT || sort.field === SandboxSearchSortField.LAST_ACTIVITY_AT
+    if (isTimestampSort) {
+      // Select the original PostgreSQL precision before TypeORM maps it to Date.
+      qb.addSelect(`to_char(${sortField} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`, 'cursor_exact_timestamp')
+    }
+    const { entities: items, raw } = await qb.getRawAndEntities()
 
     const hasMore = items.length > pagination.limit
     const returnItems = hasMore ? items.slice(0, pagination.limit) : items
@@ -163,7 +174,15 @@ export class SandboxTypeormSearchAdapter implements SandboxSearchAdapter {
     let nextCursor: string | null = null
     if (hasMore && returnItems.length > 0) {
       const lastItem = returnItems[returnItems.length - 1]
-      nextCursor = this.encodeCursor(lastItem, sort.field)
+      let preciseTimestamp: string | null | undefined
+      if (isTimestampSort) {
+        const rawItem = raw.find((item: Record<string, unknown>) => item.sandbox_id === lastItem.id)
+        if (!rawItem || (rawItem.cursor_exact_timestamp !== null && typeof rawItem.cursor_exact_timestamp !== 'string')) {
+          throw new Error('Sandbox pagination timestamp evidence is unavailable')
+        }
+        preciseTimestamp = rawItem.cursor_exact_timestamp as string | null
+      }
+      nextCursor = this.encodeCursor(lastItem, sort.field, preciseTimestamp)
     }
 
     return {
@@ -226,8 +245,12 @@ export class SandboxTypeormSearchAdapter implements SandboxSearchAdapter {
     return directionMapping[sortDirection]
   }
 
-  private encodeCursor(sandbox: Sandbox, sortField: SandboxSearchSortField): string {
-    const sortValue = this.getSortValue(sandbox, sortField)
+  private encodeCursor(
+    sandbox: Sandbox,
+    sortField: SandboxSearchSortField,
+    preciseTimestamp?: string | null,
+  ): string {
+    const sortValue = preciseTimestamp === undefined ? this.getSortValue(sandbox, sortField) : preciseTimestamp
     const cursorData = {
       sortValue: sortValue instanceof Date ? sortValue.toISOString() : sortValue,
       id: sandbox.id,
