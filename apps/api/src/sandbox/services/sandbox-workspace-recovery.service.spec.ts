@@ -13,6 +13,7 @@ import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxStorageBackend } from '../enums/sandbox-storage-backend.enum'
 import { SandboxWorkspaceRecoveryService } from './sandbox-workspace-recovery.service'
+import { EntityNotFoundError } from 'typeorm'
 import { v5 as uuidv5 } from 'uuid'
 
 const sandboxId = '11111111-1111-4111-8111-111111111111'
@@ -278,4 +279,46 @@ describe('SandboxWorkspaceRecoveryService', () => {
     expect(jobService.findOne).not.toHaveBeenCalled()
     expect(store.complete).toHaveBeenCalledTimes(1)
   })
+})
+
+it('reads retained metadata first and materializes it only under the original state-change lock', async () => {
+  const trace: string[] = []
+  let held = false
+  const repository = {
+    findOneOrFail: jest.fn().mockRejectedValue(new EntityNotFoundError(Sandbox, { id: sandboxId })),
+    retainedWorkspaceRecoverySandbox: jest.fn(async (id, org, runner, materialize) => {
+      expect([id, org, runner]).toEqual([sandboxId, organizationId, ownerRunnerId])
+      expect(held).toBe(materialize)
+      trace.push(materialize ? 'materialize' : 'peek')
+      return sandbox()
+    }),
+    updateWhere: jest.fn(async (_id, update) => ({ ...sandbox(), ...update.updateData })),
+  }
+  const jobs = {
+    createJob: jest.fn(async (...args) => {
+      trace.push('create-compute')
+      return {
+        id: uuidv5('recover-workspace', operationId), type: JobType.RECOVER_SANDBOX_WORKSPACE,
+        runnerId: ownerRunnerId, resourceType: ResourceType.SANDBOX, resourceId: sandboxId,
+        status: JobStatus.COMPLETED, payload: JSON.stringify(args[5]),
+        resultMetadata: JSON.stringify({ operationId, sandboxId, ownerRunnerId, status: 'running', daemonVersion: 'test-daemon' }),
+      }
+    }),
+  }
+  const service = new SandboxWorkspaceRecoveryService(
+    repository as never,
+    { findOne: async () => ({ id: ownerRunnerId, apiVersion: '2', region: 'local', state: RunnerState.READY,
+      unschedulable: false, draining: false, serviceHealth: [{ serviceName: 'local-volume', healthy: true }] }) } as never,
+    { getEntrypointFromDockerfile: () => ['/entrypoint'] } as never,
+    {} as never, { findOne: async () => ({}) } as never, { get: () => undefined } as never,
+    { registerRestoredLocalVolume: async () => undefined } as never, jobs as never,
+    { lock: async () => { held = true; trace.push('lock'); return true },
+      refreshOwned: async () => held, unlockOwned: async () => { held = false; return true } } as never,
+    operationStore() as never,
+  )
+  await expect(service.recover(sandboxId, organizationId, input)).resolves.toMatchObject({
+    outcome: 'recovered', sandboxId, ownerRunnerId,
+  })
+  expect(trace).toEqual(['peek', 'lock', 'materialize', 'create-compute'])
+  expect(held).toBe(false)
 })

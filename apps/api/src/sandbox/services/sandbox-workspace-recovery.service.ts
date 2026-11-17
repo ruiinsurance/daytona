@@ -6,6 +6,7 @@
 import { BadRequestException, ConflictException, Injectable, ServiceUnavailableException } from '@nestjs/common'
 import type { CreateSandboxDTO, RegistryDTO } from '@daytona/runner-api-client'
 import { v5 as uuidv5 } from 'uuid'
+import { EntityNotFoundError } from 'typeorm'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
 import { DockerRegistryService } from '../../docker-registry/services/docker-registry.service'
@@ -97,7 +98,7 @@ export class SandboxWorkspaceRecoveryService {
     input: RecoverSandboxWorkspaceInput,
   ): Promise<SandboxWorkspaceRecoveryResponse> {
     this.validateRequest(sandboxId, input)
-    let sandbox = await this.loadSandbox(sandboxId, organizationId)
+    let sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId)
     const replay = await this.operationStore.get(sandboxId, input.operationId)
     if (replay) {
       const replayed = this.replayOperation(replay, input, sandbox)
@@ -133,7 +134,7 @@ export class SandboxWorkspaceRecoveryService {
     }
 
     try {
-      sandbox = await this.loadSandbox(sandboxId, organizationId)
+      sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId, true)
       if (replay?.status === 'running' && this.isExactRecoveredSandbox(sandbox, input)) {
         await assertLockOwned()
         await this.volumeService.registerRestoredLocalVolume(input.workspace.volumeId, sandbox.organizationId)
@@ -232,8 +233,17 @@ export class SandboxWorkspaceRecoveryService {
     }
   }
 
-  private async loadSandbox(sandboxId: string, organizationId: string): Promise<Sandbox> {
-    return this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId } })
+  private async loadSandbox(
+    sandboxId: string, organizationId: string, ownerRunnerId: string, materialize = false,
+  ): Promise<Sandbox> {
+    try {
+      return await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId }, relations: ['buildInfo'] })
+    } catch (error) {
+      if (!(error instanceof EntityNotFoundError)) throw error
+      // Only the dedicated recovery protocol can reconstruct this row. The
+      // first lookup is read-only; materialization happens under its Redis lock.
+      return this.sandboxRepository.retainedWorkspaceRecoverySandbox(sandboxId, organizationId, ownerRunnerId, materialize)
+    }
   }
 
   private validateRecoverableState(sandbox: Sandbox): void {

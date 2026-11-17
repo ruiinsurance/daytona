@@ -19,14 +19,47 @@ import { SandboxOrganizationUpdatedEvent } from '../events/sandbox-organization-
 import { SandboxLookupCacheInvalidationService } from '../services/sandbox-lookup-cache-invalidation.service'
 import { SandboxFork } from '../entities/sandbox-fork.entity'
 import { Job } from '../entities/job.entity'
-import { IsNull } from 'typeorm'
+import { EntityNotFoundError, IsNull } from 'typeorm'
+import { archiveAndDeleteExpiredSandbox, assertSandboxIdentityNotRetained, loadRetainedSandboxMetadata, restoreRetainedSandboxMetadata } from './sandbox-recovery-metadata'
 import { ResourceType } from '../enums/resource-type.enum'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
+import { archiveAndDeleteExpiredSandbox, loadRetainedSandboxMetadata, restoreRetainedSandboxMetadata } from './sandbox-recovery-metadata'
 
 @Injectable()
 export class SandboxRepository extends BaseRepository<Sandbox> {
   private readonly logger = new Logger(SandboxRepository.name)
+
+  async deleteExpiredDestroyedSandbox(id: string, before: Date, assertLockOwned: () => Promise<void>): Promise<boolean> {
+    return this.dataSource.transaction(async manager => {
+      await manager.query("SET LOCAL lock_timeout='5s'")
+      await manager.query("SET LOCAL statement_timeout='10s'")
+      return archiveAndDeleteExpiredSandbox(manager, id, before, assertLockOwned)
+    })
+  }
+
+  async deleteExpiredDestroyedSandbox(sandboxId: string, before: Date): Promise<boolean> {
+    return this.dataSource.transaction(manager => archiveAndDeleteExpiredSandbox(manager, sandboxId, before))
+  }
+
+  async retainedWorkspaceRecoverySandbox(
+    sandboxId: string, organizationId: string, ownerRunnerId: string, materialize: boolean,
+  ): Promise<Sandbox> {
+    if (!materialize) {
+      const metadata = await loadRetainedSandboxMetadata(this.manager, sandboxId, organizationId, ownerRunnerId)
+      if (!metadata) throw new EntityNotFoundError(Sandbox, { id: sandboxId, organizationId })
+      return Object.assign(new Sandbox(), metadata)
+    }
+    await this.dataSource.transaction(async manager => {
+      if (!(await restoreRetainedSandboxMetadata(manager, sandboxId, organizationId, ownerRunnerId))) {
+        throw new EntityNotFoundError(Sandbox, { id: sandboxId, organizationId })
+      }
+      await this.upsertLastActivity(manager, sandboxId, new Date())
+    })
+    const restored = await this.findOneOrFail({ where: { id: sandboxId, organizationId }, relations: ['buildInfo'] })
+    this.invalidateLookupCacheOnInsert(restored)
+    return restored
+  }
 
   async hasIncompleteLifecycleJobs(sandboxId: string): Promise<boolean> {
     return this.dataSource.getRepository(Job).exists({
@@ -65,6 +98,7 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
     sandbox.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      await assertSandboxIdentityNotRetained(entityManager, sandbox.id)
       await entityManager.insert(Sandbox, sandbox)
       await this.upsertLastActivity(entityManager, sandbox.id, sandbox.createdAt)
       sandbox.lastActivityAt = { sandboxId: sandbox.id, lastActivityAt: sandbox.createdAt }
