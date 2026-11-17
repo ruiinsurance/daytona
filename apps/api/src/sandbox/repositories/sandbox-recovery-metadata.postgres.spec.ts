@@ -118,6 +118,17 @@ integration('retained local workspace metadata after PostgreSQL cleanup', () => 
     } finally { await db.query('ALTER TABLE sandbox DROP COLUMN "laterDefault"') }
   })
 
+  it('materializes exactly one identity when concurrent recovery requests replay the same retained recipe', async () => {
+    await db.transaction(tx => archiveAndDeleteExpiredSandbox(tx, id, new Date('2026-11-03')))
+    expect(await Promise.all([
+      db.transaction(tx => restoreRetainedSandboxMetadata(tx, id, org, owner)),
+      db.transaction(tx => restoreRetainedSandboxMetadata(tx, id, org, owner)),
+    ])).toEqual([true, true])
+    expect(await db.query('SELECT id,"organizationId","authToken" FROM sandbox')).toEqual([
+      { id, organizationId: org, authToken: 'private-daemon-token' },
+    ])
+  })
+
   it('does not delete a newer/active row and preserves ordinary remote cleanup', async () => {
     await db.query("UPDATE sandbox SET state='started',\"desiredState\"='started'")
     expect(await db.transaction(tx => archiveAndDeleteExpiredSandbox(tx, id, new Date('2026-11-03')))).toBe(false)
