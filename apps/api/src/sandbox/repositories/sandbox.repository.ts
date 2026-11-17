@@ -24,7 +24,6 @@ import { archiveAndDeleteExpiredSandbox, assertSandboxIdentityNotRetained, loadR
 import { ResourceType } from '../enums/resource-type.enum'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
-import { archiveAndDeleteExpiredSandbox, loadRetainedSandboxMetadata, restoreRetainedSandboxMetadata } from './sandbox-recovery-metadata'
 
 @Injectable()
 export class SandboxRepository extends BaseRepository<Sandbox> {
@@ -36,10 +35,6 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
       await manager.query("SET LOCAL statement_timeout='10s'")
       return archiveAndDeleteExpiredSandbox(manager, id, before, assertLockOwned)
     })
-  }
-
-  async deleteExpiredDestroyedSandbox(sandboxId: string, before: Date): Promise<boolean> {
-    return this.dataSource.transaction(manager => archiveAndDeleteExpiredSandbox(manager, sandboxId, before))
   }
 
   async retainedWorkspaceRecoverySandbox(

@@ -72,7 +72,10 @@ export async function archiveAndDeleteExpiredSandbox(
     if (retained.length !== 1) throw new ConflictException('Workspace recovery metadata changed during cleanup')
   }
   await assertLockOwned()
-  const deleted: Array<{ id: string }> = await manager.query('DELETE FROM sandbox WHERE id=$1::uuid RETURNING id', [sandboxId])
+  // End with SELECT so TypeORM returns rows consistently (raw DELETE uses a
+  // driver-specific [rows, affected] shape).
+  const deleted: Array<{ id: string }> = await manager.query(
+    'WITH removed AS (DELETE FROM sandbox WHERE id=$1::uuid RETURNING id) SELECT id FROM removed', [sandboxId])
   return deleted.length === 1
 }
 
