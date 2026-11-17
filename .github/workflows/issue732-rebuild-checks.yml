@@ -63,6 +63,7 @@ jobs:
         run: |
           yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath \
             apps/api/src/sandbox/repositories/sandbox-recovery-metadata.postgres.spec.ts \
+            apps/api/src/sandbox/repositories/historical-workspace-recovery.spec.ts \
             apps/api/src/sandbox/services/sandbox-workspace-recovery.service.spec.ts \
             apps/api/src/sandbox/services/sandbox-workspace-destruction.service.spec.ts
       - name: Real HTTP rebuild error contract

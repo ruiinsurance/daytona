@@ -20,7 +20,10 @@ import { SandboxLookupCacheInvalidationService } from '../services/sandbox-looku
 import { SandboxFork } from '../entities/sandbox-fork.entity'
 import { Job } from '../entities/job.entity'
 import { EntityNotFoundError, IsNull } from 'typeorm'
-import { archiveAndDeleteExpiredSandbox, assertSandboxIdentityNotRetained, loadRetainedSandboxMetadata, restoreRetainedSandboxMetadata } from './sandbox-recovery-metadata'
+import { ConflictException } from '@nestjs/common'
+import { archiveAndDeleteExpiredSandbox, assertSandboxIdentityNotRetained, loadRetainedSandboxMetadata, restoreRetainedSandboxMetadata, retainSandboxRecoveryDescriptor } from './sandbox-recovery-metadata'
+import { historicalWorkspaceRecoverySandbox } from './historical-workspace-recovery'
+import { Snapshot } from '../entities/snapshot.entity'
 import { ResourceType } from '../enums/resource-type.enum'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -49,6 +52,46 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
       if (!(await restoreRetainedSandboxMetadata(manager, sandboxId, organizationId, ownerRunnerId))) {
         throw new EntityNotFoundError(Sandbox, { id: sandboxId, organizationId })
       }
+      await this.upsertLastActivity(manager, sandboxId, new Date())
+    })
+    const restored = await this.findOneOrFail({ where: { id: sandboxId, organizationId }, relations: ['buildInfo'] })
+    this.invalidateLookupCacheOnInsert(restored)
+    return restored
+  }
+
+  async historicalWorkspaceRecoverySandbox(
+    sandboxId: string, organizationId: string, ownerRunnerId: string,
+    expectedSnapshot: string | undefined, materialize: boolean,
+  ): Promise<Sandbox> {
+    if (!expectedSnapshot) throw new EntityNotFoundError(Sandbox, { id: sandboxId, organizationId })
+    const build = async (manager: EntityManager, lock = false): Promise<{ sandbox: Sandbox; sourceCreateJobId: string }> => {
+      const snapshot = await manager.getRepository(Snapshot).findOne({ where: { name: expectedSnapshot, organizationId } })
+        ?? await manager.getRepository(Snapshot).findOne({ where: { name: expectedSnapshot, general: true } })
+      if (!snapshot) throw new EntityNotFoundError(Sandbox, { id: sandboxId, organizationId })
+      const query = manager.getRepository(Job).createQueryBuilder('job')
+        .where('job.resourceId=:sandboxId AND job.resourceType=:resourceType', { sandboxId, resourceType: ResourceType.SANDBOX })
+        .orderBy('job.createdAt', 'DESC').addOrderBy('job.id', 'DESC').take(101)
+      if (lock) query.setLock('pessimistic_read')
+      const jobs = await query.getMany()
+      const sandbox = historicalWorkspaceRecoverySandbox({ sandboxId, organizationId, ownerRunnerId, expectedSnapshot, snapshot, jobs })
+      const create = jobs.find(job => job.type === 'CREATE_SANDBOX' && job.status === 'COMPLETED')!
+      return { sandbox, sourceCreateJobId: create.id }
+    }
+    if (!materialize) return (await build(this.manager)).sandbox
+    await this.dataSource.transaction(async manager => {
+      await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('workspace-recovery:'||$1::text,0))", [sandboxId])
+      if (await manager.getRepository(Sandbox).exists({ where: { id: sandboxId } })) {
+        throw new ConflictException('Sandbox identity appeared during historical recovery')
+      }
+      const { sandbox: descriptor, sourceCreateJobId } = await build(manager, true)
+      // The source ID was validated as canonical UUID. Keep secrets server-side
+      // rather than placing env/auth values in SQL parameters or error logs.
+      await manager.createQueryBuilder().insert().into(Sandbox).values({ ...descriptor,
+        env: () => `(SELECT payload::jsonb->'env' FROM job WHERE id='${sourceCreateJobId}'::uuid)`,
+        authToken: () => `replace(gen_random_uuid()::text||gen_random_uuid()::text,'-','')`,
+      }).execute()
+      const [row] = await manager.query('SELECT to_jsonb(s) AS metadata FROM sandbox s WHERE id=$1::uuid', [sandboxId])
+      await retainSandboxRecoveryDescriptor(manager, row.metadata)
       await this.upsertLastActivity(manager, sandboxId, new Date())
     })
     const restored = await this.findOneOrFail({ where: { id: sandboxId, organizationId }, relations: ['buildInfo'] })

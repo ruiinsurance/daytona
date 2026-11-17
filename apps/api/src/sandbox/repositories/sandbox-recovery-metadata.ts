@@ -41,6 +41,26 @@ function validateRetained(
   return metadata
 }
 
+export async function retainSandboxRecoveryDescriptor(manager: QueryManager, metadata: RetainedSandboxMetadata): Promise<void> {
+  if (typeof metadata.id !== 'string' || typeof metadata.organizationId !== 'string' || typeof metadata.updatedAt !== 'string') {
+    throw new ConflictException('Invalid server-owned recovery descriptor')
+  }
+  validateRetained({ schemaVersion: 1, metadata }, metadata.id, metadata.organizationId,
+    typeof metadata.runnerId === 'string' ? metadata.runnerId : '')
+  const retained: Array<{ sandboxId: string }> = await manager.query(`
+    INSERT INTO sandbox_workspace_recovery_metadata
+      ("sandboxId", "organizationId", "schemaVersion", metadata, "providerUpdatedAt")
+    SELECT s.id,s."organizationId",1,to_jsonb(s),s."updatedAt" FROM sandbox s
+    WHERE s.id=$1::uuid AND s."organizationId"=$2::uuid AND s."updatedAt"=$3::timestamptz
+    ON CONFLICT ("sandboxId") DO UPDATE SET
+      "schemaVersion"=EXCLUDED."schemaVersion", metadata=EXCLUDED.metadata,
+      "providerUpdatedAt"=EXCLUDED."providerUpdatedAt", "updatedAt"=now()
+    WHERE sandbox_workspace_recovery_metadata."organizationId"=EXCLUDED."organizationId"
+      AND sandbox_workspace_recovery_metadata."providerUpdatedAt"<=EXCLUDED."providerUpdatedAt"
+    RETURNING "sandboxId"`, [metadata.id, metadata.organizationId, metadata.updatedAt])
+  if (retained.length !== 1) throw new ConflictException('Workspace recovery metadata changed during cleanup')
+}
+
 /** Caller owns the transaction and the normal per-sandbox state-change lock. */
 export async function archiveAndDeleteExpiredSandbox(
   manager: QueryManager, sandboxId: string, before: Date, assertLockOwned: () => Promise<void> = async () => {},
@@ -59,17 +79,7 @@ export async function archiveAndDeleteExpiredSandbox(
     throw new ConflictException('Canonical local workspace metadata is invalid; cleanup refused')
   }
   if (canonicalWorkspace(metadata)) {
-    const retained: Array<{ sandboxId: string }> = await manager.query(`
-      INSERT INTO sandbox_workspace_recovery_metadata
-        ("sandboxId", "organizationId", "schemaVersion", metadata, "providerUpdatedAt")
-      VALUES ($1::uuid,$2::uuid,1,$3::jsonb,($3::jsonb->>'updatedAt')::timestamptz)
-      ON CONFLICT ("sandboxId") DO UPDATE SET
-        "schemaVersion"=EXCLUDED."schemaVersion", metadata=EXCLUDED.metadata,
-        "providerUpdatedAt"=EXCLUDED."providerUpdatedAt", "updatedAt"=now()
-      WHERE sandbox_workspace_recovery_metadata."organizationId"=EXCLUDED."organizationId"
-        AND sandbox_workspace_recovery_metadata."providerUpdatedAt"<=EXCLUDED."providerUpdatedAt"
-      RETURNING "sandboxId"`, [sandboxId, metadata.organizationId, JSON.stringify(metadata)])
-    if (retained.length !== 1) throw new ConflictException('Workspace recovery metadata changed during cleanup')
+    await retainSandboxRecoveryDescriptor(manager, metadata)
   }
   await assertLockOwned()
   // End with SELECT so TypeORM returns rows consistently (raw DELETE uses a
@@ -113,6 +123,8 @@ export async function restoreRetainedSandboxMetadata(
   const names = columns.map(column => `"${column.name}"`).join(',')
   await manager.query(`INSERT INTO sandbox (${names})
     SELECT ${names} FROM jsonb_populate_record(NULL::sandbox,
-      $1::jsonb || jsonb_build_object('updatedAt',now()))`, [JSON.stringify(metadata)])
+      (SELECT metadata FROM sandbox_workspace_recovery_metadata
+        WHERE "sandboxId"=$1::uuid AND "organizationId"=$2::uuid AND "schemaVersion"=1)
+      || jsonb_build_object('updatedAt',now()))`, [sandboxId, organizationId])
   return true
 }

@@ -48,6 +48,7 @@ const JOB_POLL_INTERVAL_MS = 250
 const JOB_POLL_ATTEMPTS = 15 * 60 * (1000 / JOB_POLL_INTERVAL_MS)
 
 export interface RecoverSandboxWorkspaceInput {
+  expectedSnapshot?: string
   operationId: string
   ownerRunnerId: string
   workspace: { volumeId: string; mountPath: '/workspace'; subpath: string }
@@ -98,7 +99,7 @@ export class SandboxWorkspaceRecoveryService {
     input: RecoverSandboxWorkspaceInput,
   ): Promise<SandboxWorkspaceRecoveryResponse> {
     this.validateRequest(sandboxId, input)
-    let sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId)
+    let sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId, input.expectedSnapshot)
     const replay = await this.operationStore.get(sandboxId, input.operationId)
     if (replay) {
       const replayed = this.replayOperation(replay, input, sandbox)
@@ -134,7 +135,7 @@ export class SandboxWorkspaceRecoveryService {
     }
 
     try {
-      sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId, true)
+      sandbox = await this.loadSandbox(sandboxId, organizationId, input.ownerRunnerId, input.expectedSnapshot, true)
       if (replay?.status === 'running' && this.isExactRecoveredSandbox(sandbox, input)) {
         await assertLockOwned()
         await this.volumeService.registerRestoredLocalVolume(input.workspace.volumeId, sandbox.organizationId)
@@ -152,6 +153,10 @@ export class SandboxWorkspaceRecoveryService {
         throw new ConflictException('Exact owner Runner region does not match the recovery sandbox')
       }
       const snapshot = await this.resolveSnapshot(sandbox, owner)
+      if (input.expectedSnapshot) {
+        const expected = await this.snapshotService.getSnapshotByName(input.expectedSnapshot, organizationId)
+        if (expected.ref !== snapshot.ref) throw new ConflictException('Persisted recovery snapshot does not match provider metadata')
+      }
       const organization = await this.organizationService.findOne(sandbox.organizationId)
       let resuming = replay?.status === 'running'
       if (!resuming && !(await this.operationStore.begin(sandboxId, input))) {
@@ -231,10 +236,14 @@ export class SandboxWorkspaceRecoveryService {
     ) {
       throw new BadRequestException('Invalid exact workspace recovery request')
     }
+    if (input.expectedSnapshot !== undefined && (typeof input.expectedSnapshot !== 'string' ||
+      input.expectedSnapshot.trim().length === 0 || input.expectedSnapshot.length > 256)) {
+      throw new BadRequestException('Invalid persisted recovery snapshot')
+    }
   }
 
   private async loadSandbox(
-    sandboxId: string, organizationId: string, ownerRunnerId: string, materialize = false,
+    sandboxId: string, organizationId: string, ownerRunnerId: string, expectedSnapshot?: string, materialize = false,
   ): Promise<Sandbox> {
     try {
       return await this.sandboxRepository.findOneOrFail({ where: { id: sandboxId, organizationId }, relations: ['buildInfo'] })
@@ -242,7 +251,12 @@ export class SandboxWorkspaceRecoveryService {
       if (!(error instanceof EntityNotFoundError)) throw error
       // Only the dedicated recovery protocol can reconstruct this row. The
       // first lookup is read-only; materialization happens under its Redis lock.
-      return this.sandboxRepository.retainedWorkspaceRecoverySandbox(sandboxId, organizationId, ownerRunnerId, materialize)
+      try {
+        return await this.sandboxRepository.retainedWorkspaceRecoverySandbox(sandboxId, organizationId, ownerRunnerId, materialize)
+      } catch (retainedError) {
+        if (!(retainedError instanceof EntityNotFoundError)) throw retainedError
+        return this.sandboxRepository.historicalWorkspaceRecoverySandbox(sandboxId, organizationId, ownerRunnerId, expectedSnapshot, materialize)
+      }
     }
   }
 
@@ -353,6 +367,8 @@ export class SandboxWorkspaceRecoveryService {
   ): SandboxWorkspaceRecoveryResponse {
     if (
       record.ownerRunnerId !== input.ownerRunnerId ||
+      (record.expectedSnapshot !== input.expectedSnapshot &&
+        (record.expectedSnapshot !== undefined || input.expectedSnapshot !== sandbox.snapshot)) ||
       record.workspace.volumeId !== input.workspace.volumeId ||
       record.workspace.mountPath !== input.workspace.mountPath ||
       record.workspace.subpath !== input.workspace.subpath

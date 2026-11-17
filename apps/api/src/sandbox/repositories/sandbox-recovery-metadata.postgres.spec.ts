@@ -59,6 +59,9 @@ integration('retained local workspace metadata after PostgreSQL cleanup', () => 
     expect(row).toMatchObject({ id, organizationId: org, runnerId: owner, state: 'destroyed', pending: false,
       env: { PRESERVE: 'canary-secret' }, cpu: 4, mem: 8, disk: 50 })
     expect(row.volumes).toHaveLength(2)
+    // Preserve the last pinned descriptor for operation replay; synthesizing a
+    // legacy descriptor from old CREATE history instead generates a fresh token.
+    expect(row.authToken).toBe('private-daemon-token')
   })
 
   it('does not leak or materialize another organization or owner', async () => {

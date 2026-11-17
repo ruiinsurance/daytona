@@ -23,10 +23,26 @@ restored from PostgreSQL's row type, not guessed from an external UUID. Missing
 FKs or schema incompatibility fail closed. Reconstruction invalidates negative
 lookup cache and restores activity bookkeeping.
 
-The migration seeds still-existing destroyed rows. It cannot recreate metadata
-that was deleted before the migration: retained job evidence for those cases
-requires a separately reviewed drift-aware reconciliation path. Do not claim
-that this slice alone heals all historical failures.
+The migration seeds still-existing destroyed rows. For already-cleaned cases,
+the dedicated endpoint accepts an optional caller-persisted current snapshot
+name. A compatibility path requires a single completed CREATE, a latest exact
+completed local-workspace destruction, no incomplete jobs, matching organization,
+owner, canonical mount pair, resources, network policy and catalog image ref.
+Any subsequent rebuild/resize/network/owner drift or unsupported history is
+rejected. It never chooses a default image or another owner. The row is created
+only under the same state-change/advisory locks, then a complete durable recipe
+is retained. Retained recipes take precedence over historical inference.
+
+Historical synthesis generates a fresh daemon token instead of reviving the
+original CREATE token, which may have been rotated. A retained complete recipe
+preserves its last pinned credential for idempotent recovery-job replay. These
+daemon tokens are separate from the encrypted conversation key inside the
+workspace. Secrets remain server-side when retaining/restoring descriptors so
+SQL error parameters do not contain an entire environment/credential recipe.
+
+This path deliberately does not claim all historical failures are repairable:
+the read-only production cohort must establish coverage, and ambiguous cases
+remain protected for review. No batch mutation is enabled by these changes.
 
 ## Security and retention
 
