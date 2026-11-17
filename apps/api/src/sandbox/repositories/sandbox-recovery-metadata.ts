@@ -2,11 +2,31 @@
 import { ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import { isCanonicalV4Uuid } from '../../common/utils/uuid'
+import { v5 as uuidv5 } from 'uuid'
 
 type QueryManager = Pick<EntityManager, 'query'>
 export type RetainedSandboxMetadata = Record<string, unknown>
 interface RawSandbox { metadata: RetainedSandboxMetadata }
 interface RetainedRow { schemaVersion: number; metadata: RetainedSandboxMetadata }
+
+async function provenDestructionOwner(manager: QueryManager, metadata: RetainedSandboxMetadata): Promise<string | null> {
+  const jobs: Array<{ id: string; runnerId: string; payload: string; resultMetadata: string }> = await manager.query(`
+    SELECT id,"runnerId",payload,"resultMetadata" FROM job
+    WHERE "resourceId"=$1 AND "resourceType"='SANDBOX' AND type='DESTROY_SANDBOX_WORKSPACE'
+      AND status='COMPLETED' ORDER BY "createdAt" DESC,id DESC LIMIT 1`, [metadata.id])
+  try {
+    const job = jobs[0]
+    const request = JSON.parse(job?.payload ?? 'null'), evidence = JSON.parse(job?.resultMetadata ?? 'null')
+    const workspace = (metadata.volumes as Array<{ volumeId: string; mountPath: string }>).find(v => v.mountPath === '/workspace')
+    const subpath = `sandboxes/${metadata.id}/workspace`
+    if (!job || !isCanonicalV4Uuid(job.runnerId) || !request || !evidence || !workspace ||
+      request.ownerRunnerId !== job.runnerId || request.volumeId !== workspace.volumeId || request.subpath !== subpath ||
+      typeof request.operationId !== 'string' || !isCanonicalV4Uuid(request.operationId) || job.id !== uuidv5('destroy-workspace', request.operationId) ||
+      evidence.operationId !== request.operationId || evidence.sandboxId !== metadata.id || evidence.ownerRunnerId !== job.runnerId ||
+      evidence.volumeId !== workspace.volumeId || evidence.subpath !== subpath || !['removed','already_absent'].includes(evidence.outcome)) return null
+    return job.runnerId
+  } catch { return null }
+}
 
 async function lockRecoveryIdentity(manager: QueryManager, sandboxId: string): Promise<void> {
   await manager.query("SELECT pg_advisory_xact_lock(hashtextextended('workspace-recovery:'||$1::text,0))", [sandboxId])
@@ -35,7 +55,7 @@ function validateRetained(
   if (row.schemaVersion !== 1 || !metadata || metadata.id !== sandboxId ||
     metadata.organizationId !== organizationId || !canonicalWorkspace(metadata) ||
     metadata.state !== 'destroyed' || metadata.desiredState !== 'destroyed' || metadata.pending !== false ||
-    (metadata.runnerId != null && metadata.runnerId !== ownerRunnerId)) {
+    ((metadata.runnerId ?? metadata.prevRunnerId) != null && (metadata.runnerId ?? metadata.prevRunnerId) !== ownerRunnerId)) {
     throw new ConflictException('Retained workspace recovery identity is unavailable or conflicting')
   }
   return metadata
@@ -46,18 +66,20 @@ export async function retainSandboxRecoveryDescriptor(manager: QueryManager, met
     throw new ConflictException('Invalid server-owned recovery descriptor')
   }
   validateRetained({ schemaVersion: 1, metadata }, metadata.id, metadata.organizationId,
-    typeof metadata.runnerId === 'string' ? metadata.runnerId : '')
+    typeof metadata.runnerId === 'string' ? metadata.runnerId : typeof metadata.prevRunnerId === 'string' ? metadata.prevRunnerId : '')
+  const owner = metadata.runnerId ?? metadata.prevRunnerId ?? await provenDestructionOwner(manager, metadata)
   const retained: Array<{ sandboxId: string }> = await manager.query(`
     INSERT INTO sandbox_workspace_recovery_metadata
       ("sandboxId", "organizationId", "schemaVersion", metadata, "providerUpdatedAt")
-    SELECT s.id,s."organizationId",1,to_jsonb(s),s."updatedAt" FROM sandbox s
+    SELECT s.id,s."organizationId",1,to_jsonb(s) || CASE WHEN $4::uuid IS NOT NULL
+      THEN jsonb_build_object('prevRunnerId',$4::text) ELSE '{}'::jsonb END,s."updatedAt" FROM sandbox s
     WHERE s.id=$1::uuid AND s."organizationId"=$2::uuid AND s."updatedAt"=$3::timestamptz
     ON CONFLICT ("sandboxId") DO UPDATE SET
       "schemaVersion"=EXCLUDED."schemaVersion", metadata=EXCLUDED.metadata,
       "providerUpdatedAt"=EXCLUDED."providerUpdatedAt", "updatedAt"=now()
     WHERE sandbox_workspace_recovery_metadata."organizationId"=EXCLUDED."organizationId"
       AND sandbox_workspace_recovery_metadata."providerUpdatedAt"<=EXCLUDED."providerUpdatedAt"
-    RETURNING "sandboxId"`, [metadata.id, metadata.organizationId, metadata.updatedAt])
+    RETURNING "sandboxId"`, [metadata.id, metadata.organizationId, metadata.updatedAt, owner])
   if (retained.length !== 1) throw new ConflictException('Workspace recovery metadata changed during cleanup')
 }
 
@@ -96,7 +118,15 @@ export async function loadRetainedSandboxMetadata(
   const rows: RetainedRow[] = await manager.query(`SELECT "schemaVersion",metadata
     FROM sandbox_workspace_recovery_metadata
     WHERE "sandboxId"=$1::uuid AND "organizationId"=$2::uuid`, [sandboxId, organizationId])
-  return rows.length ? validateRetained(rows[0], sandboxId, organizationId, ownerRunnerId) : null
+  if (!rows.length) return null
+  const metadata = validateRetained(rows[0], sandboxId, organizationId, ownerRunnerId)
+  if (metadata.runnerId != null || metadata.prevRunnerId != null) return metadata
+  // Older DESTROYED rows cleared runnerId without preserving prevRunnerId.
+  // Recover ownership only from exact completed local-workspace destruction.
+  if (await provenDestructionOwner(manager, metadata) !== ownerRunnerId) {
+    throw new ConflictException('Retained local workspace owner cannot be proven')
+  }
+  return { ...metadata, prevRunnerId: ownerRunnerId }
 }
 
 /** Rehydrate only a server-owned recipe; never accept a caller-provided descriptor. */
@@ -125,6 +155,6 @@ export async function restoreRetainedSandboxMetadata(
     SELECT ${names} FROM jsonb_populate_record(NULL::sandbox,
       (SELECT metadata FROM sandbox_workspace_recovery_metadata
         WHERE "sandboxId"=$1::uuid AND "organizationId"=$2::uuid AND "schemaVersion"=1)
-      || jsonb_build_object('updatedAt',now()))`, [sandboxId, organizationId])
+      || jsonb_build_object('updatedAt',now(),'prevRunnerId',$3::text))`, [sandboxId, organizationId, ownerRunnerId])
   return true
 }

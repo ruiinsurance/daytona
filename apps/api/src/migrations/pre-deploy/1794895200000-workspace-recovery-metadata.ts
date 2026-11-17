@@ -18,6 +18,7 @@ export class Migration1794895200000 implements MigrationInterface {
         AND metadata->'pending'='false'::jsonb)
     )`)
     await queryRunner.query('CREATE INDEX IF NOT EXISTS workspace_recovery_metadata_org ON sandbox_workspace_recovery_metadata ("organizationId")')
+    await queryRunner.query('REVOKE ALL ON sandbox_workspace_recovery_metadata FROM PUBLIC')
     // Capture rows that still exist before the old API's next cleanup tick.
     await queryRunner.query(`INSERT INTO sandbox_workspace_recovery_metadata
       ("sandboxId","organizationId",metadata,"providerUpdatedAt")

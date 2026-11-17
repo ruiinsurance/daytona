@@ -107,7 +107,7 @@ export class SandboxWorkspaceRecoveryService {
     }
     if (!replay) {
       this.validateRecoverableState(sandbox)
-      this.validateOriginalIdentity(sandbox)
+      this.validateOriginalIdentity(sandbox, input.ownerRunnerId)
     }
 
     const lockKey = getStateChangeLockKey(sandboxId)
@@ -144,7 +144,7 @@ export class SandboxWorkspaceRecoveryService {
         return result
       }
       this.validateRecoverableState(sandbox)
-      const originalWorkspace = this.validateOriginalIdentity(sandbox)
+      const originalWorkspace = this.validateOriginalIdentity(sandbox, input.ownerRunnerId)
       if (originalWorkspace.volumeId === input.workspace.volumeId) {
         throw new ConflictException('Recovery replacement must differ from the original physical Volume')
       }
@@ -271,8 +271,11 @@ export class SandboxWorkspaceRecoveryService {
     }
   }
 
-  private validateOriginalIdentity(sandbox: Sandbox): LocalVolumeMount & { subpath: string } {
+  private validateOriginalIdentity(sandbox: Sandbox, ownerRunnerId: string): LocalVolumeMount & { subpath: string } {
     try {
+      if ((sandbox.runnerId ?? sandbox.prevRunnerId) != null && (sandbox.runnerId ?? sandbox.prevRunnerId) !== ownerRunnerId) {
+        throw new Error('owner mismatch')
+      }
       const workspace = buildRunnerVolumes(sandbox).find((volume) => volume.mountPath === '/workspace')
       if (!workspace?.subpath) throw new Error('missing original workspace')
       return workspace as LocalVolumeMount & { subpath: string }

@@ -1,5 +1,6 @@
 /* Copyright Daytona Platforms Inc. SPDX-License-Identifier: AGPL-3.0 */
 import { DataSource } from 'typeorm'
+import { v5 as uuidv5 } from 'uuid'
 import {
   archiveAndDeleteExpiredSandbox,
   assertSandboxIdentityNotRetained,
@@ -27,20 +28,22 @@ integration('retained local workspace metadata after PostgreSQL cleanup', () => 
     db = new DataSource({ type: 'postgres', url })
     await db.initialize()
     await db.query(`CREATE TABLE sandbox (
-      id uuid PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" uuid,
+      id uuid PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" uuid, "prevRunnerId" uuid,
       "storageBackend" text NOT NULL, state text NOT NULL, "desiredState" text NOT NULL,
       pending boolean NOT NULL, volumes jsonb NOT NULL, snapshot text,
       cpu integer NOT NULL, mem integer NOT NULL, disk integer NOT NULL, env jsonb NOT NULL,
       "authToken" text NOT NULL, "createdAt" timestamptz NOT NULL, "updatedAt" timestamptz NOT NULL
     )`)
+    await db.query(`CREATE TABLE job (id uuid PRIMARY KEY,"resourceId" text,"resourceType" text,type text,
+      status text,"runnerId" uuid,payload text,"resultMetadata" text,"createdAt" timestamptz)`)
     const runner = db.createQueryRunner()
     await new Migration1794895200000().up(runner)
     await runner.release()
   })
   afterAll(async () => { if (db?.isInitialized) await db.destroy() })
   beforeEach(async () => {
-    await db.query('TRUNCATE sandbox, sandbox_workspace_recovery_metadata')
-    await db.query(`INSERT INTO sandbox VALUES ($1,$2,$3,'local','destroyed','destroyed',false,$4::jsonb,
+    await db.query('TRUNCATE sandbox, sandbox_workspace_recovery_metadata, job')
+    await db.query(`INSERT INTO sandbox VALUES ($1,$2,$3,NULL,'local','destroyed','destroyed',false,$4::jsonb,
       'original-snapshot',4,8,50,'{"PRESERVE":"canary-secret"}', 'private-daemon-token',
       '2026-10-01 00:00:00.123456+00','2026-11-01 00:00:00.654321+00')`,
     [id, org, owner, JSON.stringify([{ volumeId: volume, mountPath: '/workspace', subpath },
@@ -70,6 +73,22 @@ integration('retained local workspace metadata after PostgreSQL cleanup', () => 
     await expect(db.transaction(tx => restoreRetainedSandboxMetadata(tx, id, org, org))).rejects.toThrow()
     expect(await db.query('SELECT id FROM sandbox')).toEqual([])
     await expect(db.transaction(tx => assertSandboxIdentityNotRetained(tx, id))).rejects.toThrow('reserved')
+  })
+
+  it('proves a legacy cleared owner from exact destruction evidence and retains that proof', async () => {
+    const operation = '55555555-5555-4555-8555-555555555555'
+    await db.query('UPDATE sandbox SET "runnerId"=NULL')
+    await db.query(`INSERT INTO job VALUES ($1,$2,'SANDBOX','DESTROY_SANDBOX_WORKSPACE','COMPLETED',$3,$4,$5,now())`,
+      [uuidv5('destroy-workspace', operation), id, owner,
+        JSON.stringify({ operationId: operation, ownerRunnerId: owner, volumeId: volume, subpath }),
+        JSON.stringify({ operationId: operation, ownerRunnerId: owner, volumeId: volume, subpath, sandboxId: id, outcome: 'removed' })])
+    await db.transaction(tx => archiveAndDeleteExpiredSandbox(tx, id, new Date('2026-11-03')))
+    // The durable descriptor no longer relies on future job-history retention.
+    await db.query('DELETE FROM job')
+    expect(await loadRetainedSandboxMetadata(db.manager, id, org, owner)).toMatchObject({ runnerId: null, prevRunnerId: owner })
+    await expect(loadRetainedSandboxMetadata(db.manager, id, org, org)).rejects.toThrow()
+    await db.transaction(tx => restoreRetainedSandboxMetadata(tx, id, org, owner))
+    expect((await db.query('SELECT "prevRunnerId" FROM sandbox'))[0]).toEqual({ prevRunnerId: owner })
   })
 
   it('rolls the delete back if retained metadata cannot be committed', async () => {

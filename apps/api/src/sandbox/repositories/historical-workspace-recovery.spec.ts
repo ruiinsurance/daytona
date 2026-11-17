@@ -42,7 +42,7 @@ function fixture() {
 it('reconstructs only the exact same image/organization/owner and proven configuration', () => {
   const input = fixture()
   const result = historicalWorkspaceRecoverySandbox(input)
-  expect(result).toMatchObject({ id: sandboxId, organizationId, runnerId: ownerRunnerId,
+  expect(result).toMatchObject({ id: sandboxId, organizationId, runnerId: null, prevRunnerId: ownerRunnerId,
     snapshot: input.snapshot.name, cpu: 4, gpu: 0, mem: 8, disk: 50,
     env: input.payload.env, networkBlockAll: true,
     networkAllowList: '10.0.0.0/8', domainAllowList: 'example.test',
