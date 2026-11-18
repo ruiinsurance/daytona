@@ -97,4 +97,4 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - name: Runner compile and read-only inspection regressions
         working-directory: apps/runner
-        run: go test ./pkg/docker ./pkg/api/controllers ./pkg/api -run 'TestRebuildInspect' -count=1
+        run: go test ./pkg/docker ./pkg/api/controllers ./pkg/api -run 'TestRebuildInspect|TestProbeLocalWorkspaceMissingOrEmpty' -count=1

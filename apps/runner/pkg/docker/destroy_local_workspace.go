@@ -71,7 +71,7 @@ func (d *DockerClient) RecoverLocalWorkspace(
 	if err != nil {
 		return "", "", err
 	}
-	originalMissing, err := probeLocalWorkspaceMissing(
+	originalMissingOrEmpty, err := probeLocalWorkspaceMissingOrEmpty(
 		d.localVolumeRoot,
 		sandbox.Id,
 		originalVolumeID,
@@ -81,7 +81,7 @@ func (d *DockerClient) RecoverLocalWorkspace(
 	if err != nil {
 		return "", "", err
 	}
-	if !originalMissing {
+	if !originalMissingOrEmpty {
 		return "", "", fmt.Errorf("original local workspace is still available")
 	}
 	if err := validateLocalWorkspaceForRecovery(
@@ -96,7 +96,7 @@ func (d *DockerClient) RecoverLocalWorkspace(
 	return d.Create(ctx, sandbox)
 }
 
-func probeLocalWorkspaceMissing(
+func probeLocalWorkspaceMissingOrEmpty(
 	localVolumeRoot string,
 	sandboxID string,
 	volumeID string,
@@ -130,6 +130,7 @@ func probeLocalWorkspaceMissing(
 	}
 	defer root.Close()
 	components := strings.Split(filepath.ToSlash(relativeTarget), "/")
+	var originalInfo os.FileInfo
 	for index := range components {
 		componentPath := filepath.Join(components[:index+1]...)
 		info, inspectErr := root.Lstat(componentPath)
@@ -145,6 +146,25 @@ func probeLocalWorkspaceMissing(
 		if !info.IsDir() {
 			return false, fmt.Errorf("original workspace component is not a directory")
 		}
+		originalInfo = info
+	}
+	// An empty placeholder is not a usable workspace. Only inspect it;
+	// recovery creates compute against the separately verified replacement.
+	original, err := root.Open(relativeTarget)
+	if err != nil {
+		return false, fmt.Errorf("open original workspace: %w", err)
+	}
+	defer original.Close()
+	openedInfo, err := original.Stat()
+	if err != nil || !os.SameFile(originalInfo, openedInfo) {
+		return false, fmt.Errorf("original workspace identity changed during recovery")
+	}
+	_, err = original.Readdirnames(1)
+	if errors.Is(err, io.EOF) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect original workspace entries: %w", err)
 	}
 	return false, nil
 }
