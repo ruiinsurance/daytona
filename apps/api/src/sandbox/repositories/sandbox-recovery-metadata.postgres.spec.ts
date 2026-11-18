@@ -7,7 +7,7 @@ import {
   loadRetainedSandboxMetadata,
   restoreRetainedSandboxMetadata,
 } from './sandbox-recovery-metadata'
-import { Migration1794895200000 } from '../../migrations/pre-deploy/1794895200000-workspace-recovery-metadata'
+import { Migration1794895200000 } from '../../migrations/pre-deploy/1794895200000-migration'
 
 const url = process.env.DAYTONA_RECOVERY_TEST_DATABASE_URL
 const integration = url ? describe : describe.skip
