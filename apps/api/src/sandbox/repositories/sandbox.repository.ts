@@ -90,7 +90,7 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
         env: () => `(SELECT payload::jsonb->'env' FROM job WHERE id='${sourceCreateJobId}'::uuid)`,
         authToken: () => `replace(gen_random_uuid()::text||gen_random_uuid()::text,'-','')`,
       }).execute()
-      const [row] = await manager.query('SELECT to_jsonb(s) AS metadata FROM sandbox s WHERE id=$1::uuid', [sandboxId])
+      const [row] = await manager.query('SELECT to_jsonb(s) AS metadata FROM sandbox s WHERE id=$1', [sandboxId])
       await retainSandboxRecoveryDescriptor(manager, row.metadata)
       await this.upsertLastActivity(manager, sandboxId, new Date())
     })
