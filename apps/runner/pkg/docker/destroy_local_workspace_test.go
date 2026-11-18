@@ -229,10 +229,10 @@ func TestValidateLocalWorkspaceForRecoveryRejectsEmptySlice(t *testing.T) {
 	}
 }
 
-func TestProbeLocalWorkspaceMissingDistinguishesAbsentFromAvailable(t *testing.T) {
+func TestProbeLocalWorkspaceMissingOrEmptyDistinguishesPlaceholderFromData(t *testing.T) {
 	root := trustedTempRoot(t)
 	subpath := "sandboxes/" + destroyWorkspaceSandboxID + "/workspace"
-	missing, err := probeLocalWorkspaceMissing(
+	missing, err := probeLocalWorkspaceMissingOrEmpty(
 		root,
 		destroyWorkspaceSandboxID,
 		destroyWorkspaceVolumeID,
@@ -243,8 +243,22 @@ func TestProbeLocalWorkspaceMissingDistinguishesAbsentFromAvailable(t *testing.T
 		t.Fatalf("expected missing original workspace, missing=%t err=%v", missing, err)
 	}
 
-	mustWriteTestFile(t, filepath.Join(localWorkspaceTestPath(root, destroyWorkspaceVolumeID, destroyWorkspaceSandboxID), "live.txt"))
-	missing, err = probeLocalWorkspaceMissing(
+	workspace := localWorkspaceTestPath(root, destroyWorkspaceVolumeID, destroyWorkspaceSandboxID)
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	missing, err = probeLocalWorkspaceMissingOrEmpty(root, destroyWorkspaceSandboxID, destroyWorkspaceVolumeID, subpath, nil)
+	if err != nil || !missing {
+		t.Fatalf("expected empty placeholder to permit recovery, missing=%t err=%v", missing, err)
+	}
+	if _, err := os.Stat(workspace); err != nil {
+		t.Fatalf("recovery probe changed the original directory: %v", err)
+	}
+	if _, err := probeLocalWorkspaceMissingOrEmpty(root, destroyWorkspaceSandboxID, destroyWorkspaceVolumeID, subpath, []string{workspace}); err == nil {
+		t.Fatal("expected mounted empty placeholder to be rejected")
+	}
+	mustWriteTestFile(t, filepath.Join(workspace, "live.txt"))
+	missing, err = probeLocalWorkspaceMissingOrEmpty(
 		root,
 		destroyWorkspaceSandboxID,
 		destroyWorkspaceVolumeID,

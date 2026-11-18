@@ -223,6 +223,7 @@ export class SandboxWorkspaceDestructionService {
       workspace.volumeId !== input.volumeId ||
       workspace.subpath !== input.subpath ||
       (sandbox.runnerId !== null && sandbox.runnerId !== undefined && sandbox.runnerId !== input.ownerRunnerId) ||
+      (sandbox.runnerId == null && sandbox.prevRunnerId != null && sandbox.prevRunnerId !== input.ownerRunnerId) ||
       (sandbox.state === SandboxState.STOPPED && sandbox.runnerId !== input.ownerRunnerId)
     ) {
       throw new ConflictException('Sandbox local workspace identity does not match the destruction request')

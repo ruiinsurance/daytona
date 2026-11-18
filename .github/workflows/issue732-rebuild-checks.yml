@@ -47,6 +47,7 @@ jobs:
       REBUILD_PROTOCOL_REDIS_TEST: '1'
       REBUILD_PROTOCOL_REDIS_URL: redis://127.0.0.1:6379/15
       DAYTONA_CURSOR_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/daytona_cursor_test
+      DAYTONA_RECOVERY_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/daytona_recovery_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -54,6 +55,17 @@ jobs:
           node-version: 22
       - run: corepack enable
       - run: yarn install --immutable
+      - name: Create isolated delayed-recovery database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h 127.0.0.1 -U postgres -d daytona_cursor_test -v ON_ERROR_STOP=1 -c 'CREATE DATABASE daytona_recovery_test'
+      - name: Workspace recovery and metadata cleanup regressions
+        run: |
+          yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath \
+            apps/api/src/sandbox/repositories/sandbox-recovery-metadata.postgres.spec.ts \
+            apps/api/src/sandbox/repositories/historical-workspace-recovery.spec.ts \
+            apps/api/src/sandbox/services/sandbox-workspace-recovery.service.spec.ts \
+            apps/api/src/sandbox/services/sandbox-workspace-destruction.service.spec.ts
       - name: Real HTTP rebuild error contract
         run: yarn jest --config apps/api/jest.config.ts --runInBand --runTestsByPath apps/api/src/sandbox/controllers/sandbox-rebuild.http.spec.ts
       - name: API typecheck
@@ -85,4 +97,4 @@ jobs:
           cache-dependency-path: '**/go.sum'
       - name: Runner compile and read-only inspection regressions
         working-directory: apps/runner
-        run: go test ./pkg/docker ./pkg/api/controllers ./pkg/api -run 'TestRebuildInspect' -count=1
+        run: go test ./pkg/docker ./pkg/api/controllers ./pkg/api -run 'TestRebuildInspect|TestProbeLocalWorkspaceMissingOrEmpty' -count=1

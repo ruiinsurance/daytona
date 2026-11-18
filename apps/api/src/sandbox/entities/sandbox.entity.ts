@@ -459,6 +459,10 @@ export class Sandbox {
       (this.state === SandboxState.DESTROYED || this.state === SandboxState.ARCHIVED) &&
       shouldClearRunnerOnTerminalState(this.storageBackend, this.state)
     ) {
+      if (this.storageBackend === SandboxStorageBackend.LOCAL && this.runnerId) {
+        // Releasing compute must not erase the last local workspace owner.
+        changes.prevRunnerId = this.runnerId
+      }
       changes.runnerId = null
     }
 

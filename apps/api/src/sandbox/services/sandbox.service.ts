@@ -79,7 +79,8 @@ import {
   ARCHIVE_SANDBOXES_MESSAGE,
   PER_SANDBOX_LIMIT_MESSAGE,
 } from '../../common/constants/error-messages'
-import { RedisLockProvider } from '../common/redis-lock.provider'
+import { LockCode, RedisLockProvider } from '../common/redis-lock.provider'
+import { randomUUID } from 'node:crypto'
 import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { customAlphabet as customNanoid, nanoid, urlAlphabet } from 'nanoid'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
@@ -2869,7 +2870,8 @@ export class SandboxService {
   @WithInstrumentation()
   async cleanupDestroyedSandboxes() {
     const lockKey = 'sandbox:cleanup-destroyed-sandboxes'
-    const acquired = await this.redisLockProvider.lock(lockKey, 300)
+    const cleanupCode = new LockCode(randomUUID())
+    const acquired = await this.redisLockProvider.lock(lockKey, 300, cleanupCode)
     if (!acquired) {
       return
     }
@@ -2878,16 +2880,35 @@ export class SandboxService {
       const twentyFourHoursAgo = new Date()
       twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24)
 
-      const destroyedSandboxs = await this.sandboxRepository.delete({
+      const candidates = await this.sandboxRepository.find({ where: {
         state: SandboxState.DESTROYED,
+        desiredState: SandboxDesiredState.DESTROYED,
+        pending: false,
         updatedAt: LessThan(twentyFourHoursAgo),
-      })
-
-      if (destroyedSandboxs.affected > 0) {
-        this.logger.debug(`Cleaned up ${destroyedSandboxs.affected} destroyed sandboxes`)
+      }, select: ['id'], order: { updatedAt: 'ASC', id: 'ASC' }, take: 100 })
+      let affected = 0
+      for (const candidate of candidates) {
+        if (!(await this.redisLockProvider.refreshOwned(lockKey, 300, cleanupCode))) break
+        const stateKey = getStateChangeLockKey(candidate.id)
+        const code = new LockCode(randomUUID())
+        if (!(await this.redisLockProvider.lock(stateKey, 60, code))) continue
+        try {
+          const assertLockOwned = async () => {
+            if (!(await this.redisLockProvider.refreshOwned(stateKey, 60, code)) ||
+              !(await this.redisLockProvider.refreshOwned(lockKey, 300, cleanupCode))) {
+              throw new ConflictException('Cleanup state-change lock ownership lost')
+            }
+          }
+          if (await this.sandboxRepository.deleteExpiredDestroyedSandbox(candidate.id, twentyFourHoursAgo, assertLockOwned)) affected++
+        } finally {
+          await this.redisLockProvider.unlockOwned(stateKey, code)
+        }
+      }
+      if (affected > 0) {
+        this.logger.debug(`Cleaned up ${affected} destroyed sandboxes with recovery metadata retained`)
       }
     } finally {
-      await this.redisLockProvider.unlock(lockKey)
+      await this.redisLockProvider.unlockOwned(lockKey, cleanupCode)
     }
   }
 

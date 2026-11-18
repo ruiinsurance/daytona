@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
 import { Type } from 'class-transformer'
-import { Equals, IsString, IsUUID, MaxLength, ValidateNested } from 'class-validator'
+import { Equals, IsOptional, IsString, IsUUID, MaxLength, MinLength, ValidateNested } from 'class-validator'
 
 export class RecoverSandboxWorkspaceIdentityDto {
   @ApiProperty({ format: 'uuid' })
@@ -23,6 +23,13 @@ export class RecoverSandboxWorkspaceIdentityDto {
 }
 
 export class RecoverSandboxWorkspaceDto {
+  @ApiPropertyOptional({ description: 'Caller persisted current snapshot name; required for historical metadata reconstruction' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(256)
+  expectedSnapshot?: string
+
   @ApiProperty({ format: 'uuid' })
   @IsUUID('4')
   operationId: string
