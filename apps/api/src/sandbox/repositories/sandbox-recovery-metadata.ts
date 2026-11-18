@@ -71,9 +71,9 @@ export async function retainSandboxRecoveryDescriptor(manager: QueryManager, met
   const retained: Array<{ sandboxId: string }> = await manager.query(`
     INSERT INTO sandbox_workspace_recovery_metadata
       ("sandboxId", "organizationId", "schemaVersion", metadata, "providerUpdatedAt")
-    SELECT s.id,s."organizationId",1,to_jsonb(s) || CASE WHEN $4::uuid IS NOT NULL
+    SELECT s.id::uuid,s."organizationId",1,to_jsonb(s) || CASE WHEN $4::uuid IS NOT NULL
       THEN jsonb_build_object('prevRunnerId',$4::text) ELSE '{}'::jsonb END,s."updatedAt" FROM sandbox s
-    WHERE s.id=$1::uuid AND s."organizationId"=$2::uuid AND s."updatedAt"=$3::timestamptz
+    WHERE s.id=$1 AND s."organizationId"=$2::uuid AND s."updatedAt"=$3::timestamptz
     ON CONFLICT ("sandboxId") DO UPDATE SET
       "schemaVersion"=EXCLUDED."schemaVersion", metadata=EXCLUDED.metadata,
       "providerUpdatedAt"=EXCLUDED."providerUpdatedAt", "updatedAt"=now()
@@ -90,7 +90,7 @@ export async function archiveAndDeleteExpiredSandbox(
   await lockRecoveryIdentity(manager, sandboxId)
   const rows: RawSandbox[] = await manager.query(`
     SELECT to_jsonb(s) AS metadata FROM sandbox s
-    WHERE id=$1::uuid AND state='destroyed' AND "desiredState"='destroyed'
+    WHERE id=$1 AND state='destroyed' AND "desiredState"='destroyed'
       AND pending=false AND "updatedAt"<$2::timestamptz FOR UPDATE`, [sandboxId, before.toISOString()])
   if (!rows.length) return false
   await assertLockOwned()
@@ -107,7 +107,7 @@ export async function archiveAndDeleteExpiredSandbox(
   // End with SELECT so TypeORM returns rows consistently (raw DELETE uses a
   // driver-specific [rows, affected] shape).
   const deleted: Array<{ id: string }> = await manager.query(
-    'WITH removed AS (DELETE FROM sandbox WHERE id=$1::uuid RETURNING id) SELECT id FROM removed', [sandboxId])
+    'WITH removed AS (DELETE FROM sandbox WHERE id=$1 RETURNING id) SELECT id FROM removed', [sandboxId])
   return deleted.length === 1
 }
 
@@ -136,7 +136,7 @@ export async function restoreRetainedSandboxMetadata(
   await lockRecoveryIdentity(manager, sandboxId)
   const metadata = await loadRetainedSandboxMetadata(manager, sandboxId, organizationId, ownerRunnerId)
   if (!metadata) return false
-  const existing: RawSandbox[] = await manager.query('SELECT to_jsonb(s) AS metadata FROM sandbox s WHERE id=$1::uuid FOR UPDATE', [sandboxId])
+  const existing: RawSandbox[] = await manager.query('SELECT to_jsonb(s) AS metadata FROM sandbox s WHERE id=$1 FOR UPDATE', [sandboxId])
   if (existing.length) {
     validateRetained({ schemaVersion: 1, metadata: existing[0].metadata }, sandboxId, organizationId, ownerRunnerId)
     return true

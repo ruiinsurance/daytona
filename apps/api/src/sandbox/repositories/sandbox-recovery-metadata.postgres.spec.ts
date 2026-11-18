@@ -28,7 +28,7 @@ integration('retained local workspace metadata after PostgreSQL cleanup', () => 
     db = new DataSource({ type: 'postgres', url })
     await db.initialize()
     await db.query(`CREATE TABLE sandbox (
-      id uuid PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" uuid, "prevRunnerId" uuid,
+      id varchar PRIMARY KEY, "organizationId" uuid NOT NULL, "runnerId" uuid, "prevRunnerId" uuid,
       "storageBackend" text NOT NULL, state text NOT NULL, "desiredState" text NOT NULL,
       pending boolean NOT NULL, volumes jsonb NOT NULL, snapshot text,
       cpu integer NOT NULL, mem integer NOT NULL, disk integer NOT NULL, env jsonb NOT NULL,

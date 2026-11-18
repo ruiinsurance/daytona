@@ -22,7 +22,7 @@ export class Migration1794895200000 implements MigrationInterface {
     // Capture rows that still exist before the old API's next cleanup tick.
     await queryRunner.query(`INSERT INTO sandbox_workspace_recovery_metadata
       ("sandboxId","organizationId",metadata,"providerUpdatedAt")
-      SELECT s.id,s."organizationId",to_jsonb(s),s."updatedAt" FROM sandbox s
+      SELECT s.id::uuid,s."organizationId",to_jsonb(s),s."updatedAt" FROM sandbox s
       WHERE s.state='destroyed' AND s."desiredState"='destroyed' AND s.pending=false
         AND s."storageBackend"='local' AND EXISTS (
           SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.volumes)='array' THEN s.volumes ELSE '[]'::jsonb END) v
